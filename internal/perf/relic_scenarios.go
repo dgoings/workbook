@@ -46,6 +46,8 @@ var relicScenarioNames = []string{
 	"relic-refresh-0",
 	"relic-refresh-1",
 	"relic-refresh-100",
+	"relic-sync-merge-100",
+	"relic-merge-repetitive-1mib",
 	"relic-clone-setup",
 	"relic-rebuild-fresh-clone",
 	"relic-first-read-fresh-clone",
@@ -55,8 +57,9 @@ var relicScenarioNames = []string{
 // RelicScenarioNames returns the relic family's scenarios in report order.
 // The names are the story's, at every scale: at the smoke scale
 // relic-body-1mib reads the smoke body, relic-create-16mib writes the smoke
-// FullBodiesBytes, relic-push-100 pushes the smoke count and the history and
-// diff scenarios read the smoke history relic.
+// FullBodiesBytes, relic-push-100 pushes the smoke count, the history and
+// diff scenarios read the smoke history relic and the merge scenarios merge the
+// smoke merge set.
 func RelicScenarioNames() []string {
 	return append([]string(nil), relicScenarioNames...)
 }
@@ -148,6 +151,12 @@ func (r *relicRun) command(directory string, args []string) CommandSpec {
 // scenario, since its time is not the time of the work its name says.
 func (r *relicRun) measure(name, directory string, args []string, verify relicVerifier) (CommandMeasurement, error) {
 	measurement := r.dependencies.measureCommand(r.ctx, r.command(directory, args))
+	return measurement, r.record(name, measurement, verify)
+}
+
+// record keeps one sample of a scenario, with its Git command tally, and checks
+// the answer of a command that succeeded.
+func (r *relicRun) record(name string, measurement CommandMeasurement, verify relicVerifier) error {
 	result, found := r.results[name]
 	if !found {
 		result = &ScenarioResult{Name: name, Surface: "cold-cli"}
@@ -163,12 +172,28 @@ func (r *relicRun) measure(name, directory string, args []string, verify relicVe
 		tally[command] = max(tally[command], count)
 	}
 	if !sampleSucceeded(measurement.Sample) || verify == nil {
-		return measurement, nil
+		return nil
 	}
 	if err := verify(measurement.Stdout); err != nil {
-		return measurement, fmt.Errorf("%s: %w", name, err)
+		return fmt.Errorf("%s: %w", name, err)
 	}
-	return measurement, nil
+	return nil
+}
+
+// measureMergeOrRefusal times one sync of a clone whose save of relicID's body
+// has to be merged. A merge may be refused as too costly to make, and the sync
+// then exits with the conflict code. That exit, with a report of that refusal
+// and no other, is the work the scenario times, so its sample is recorded as
+// completed, with exit code 0; any other failure is kept as it is.
+func (r *relicRun) measureMergeOrRefusal(name, directory, relicID string) error {
+	measurement := r.dependencies.measureCommand(r.ctx, r.command(directory, []string{"sync", "--json"}))
+	conflict := core.ExitCode(core.Errorf(core.CategoryConflict, "merge refused"))
+	if measurement.Sample.ExitCode == conflict && !measurement.Sample.TimedOut &&
+		verifySyncMergeRefused(relicID)(measurement.Stdout) == nil {
+		measurement.Sample.ExitCode, measurement.Sample.Error = 0, ""
+		return r.record(name, measurement, nil)
+	}
+	return r.record(name, measurement, verifySyncMerged(1))
 }
 
 // untimed runs a command that is setup rather than measurement: a warm-up, or
@@ -469,6 +494,80 @@ func verifySyncRelics(push bool, want int) relicVerifier {
 	}
 }
 
+// mergeSyncReport is what the merge scenarios read of a sync's envelope.
+type mergeSyncReport struct {
+	relics    []gitstore.SyncRelicResult
+	warnings  []core.Warning
+	conflicts []core.RelicConflict
+}
+
+func readMergeSync(stdout []byte) (mergeSyncReport, error) {
+	var synced struct {
+		Fetch relicSyncPhase `json:"fetch"`
+	}
+	if err := resultData(stdout, &synced); err != nil {
+		return mergeSyncReport{}, err
+	}
+	var envelope struct {
+		Warnings  []core.Warning       `json:"warnings"`
+		Conflicts []core.RelicConflict `json:"relicConflict"`
+	}
+	if err := json.Unmarshal(stdout, &envelope); err != nil {
+		return mergeSyncReport{}, fmt.Errorf("decode result: %w", err)
+	}
+	return mergeSyncReport{synced.Fetch.Relics, envelope.Warnings, envelope.Conflicts}, nil
+}
+
+// verifySyncMerged checks a sync that merged the saves of want relics: each
+// reported reconciled with one relic-body-merged warning, and no conflict.
+func verifySyncMerged(want int) relicVerifier {
+	return func(stdout []byte) error {
+		report, err := readMergeSync(stdout)
+		if err != nil {
+			return err
+		}
+		reconciled := 0
+		for _, relic := range report.relics {
+			if relic.Status == gitstore.SyncReconciled {
+				reconciled++
+			}
+		}
+		merged := 0
+		for _, warning := range report.warnings {
+			if warning.Code == core.WarningRelicBodyMerged {
+				merged++
+			}
+		}
+		if reconciled != want || merged != want || len(report.conflicts) != 0 {
+			return fmt.Errorf("reconciled %d relics with %d merge warnings and %d conflicts, want %d, %d and none (%+v)",
+				reconciled, merged, len(report.conflicts), want, want, report.conflicts)
+		}
+		return nil
+	}
+}
+
+// verifySyncMergeRefused checks a sync that refused to merge relicID's body as
+// too many changes to compare: one such body conflict, and the relic
+// conflicted.
+func verifySyncMergeRefused(relicID string) relicVerifier {
+	return func(stdout []byte) error {
+		report, err := readMergeSync(stdout)
+		if err != nil {
+			return err
+		}
+		if len(report.conflicts) != 1 || report.conflicts[0].RelicID != relicID ||
+			report.conflicts[0].Body == nil || report.conflicts[0].Body.Reason != core.RelicMergeTooManyChanges {
+			return fmt.Errorf("conflicts %+v, want %s refused as %s", report.conflicts, relicID, core.RelicMergeTooManyChanges)
+		}
+		if !slices.ContainsFunc(report.relics, func(relic gitstore.SyncRelicResult) bool {
+			return relic.RelicID == relicID && relic.Status == gitstore.SyncConflicted
+		}) {
+			return fmt.Errorf("relics %+v, want %s conflicted", report.relics, relicID)
+		}
+		return nil
+	}
+}
+
 func verifyValidated(stdout []byte) error {
 	var validated struct {
 		Invalid int `json:"invalid"`
@@ -530,6 +629,7 @@ func runRelicBenchmark(ctx context.Context, spec RelicRunSpec, root string, depe
 		bench.measureCreates,
 		bench.measureMain,
 		bench.measureRemote,
+		bench.measureMerges,
 		bench.measureFreshClones,
 		bench.measureValidation,
 		bench.accountStorage,
@@ -667,14 +767,7 @@ func (b *relicBench) publishAndClone() error {
 	spec := b.run.spec
 	b.origin = filepath.Join(b.root, "origin.git")
 	if err := b.stage("publish", func(ctx context.Context) error {
-		if err := initBareFixtureOrigin(ctx, spec.FixtureTimeout, spec.Fixture.ObjectFormat, b.origin); err != nil {
-			return err
-		}
-		if _, _, err := runRepositoryGit(ctx, spec.FixtureTimeout, b.main, "remote", "add", "origin", b.origin); err != nil {
-			return err
-		}
-		_, _, err := runRepositoryGit(ctx, spec.FixtureTimeout, b.main, "push", "--quiet", "origin", "refs/workbook/*:refs/workbook/*")
-		return err
+		return publishRelicFixture(ctx, spec, b.main, b.origin)
 	}); err != nil {
 		return err
 	}
@@ -682,13 +775,7 @@ func (b *relicBench) publishAndClone() error {
 	b.cloneB = filepath.Join(b.root, "clone-b")
 	return b.stage("clones", func(ctx context.Context) error {
 		for _, clone := range []string{b.cloneA, b.cloneB} {
-			if err := b.cloneOrigin(ctx, clone); err != nil {
-				return err
-			}
-			if _, err := b.run.untimed("set up "+filepath.Base(clone), clone, []string{"setup", "--json"}, nil); err != nil {
-				return err
-			}
-			if _, err := b.run.untimed("index "+filepath.Base(clone), clone, []string{"relic", "list", "--json"}, verifyRelicListCount(b.relicCount())); err != nil {
+			if err := b.setUpClone(ctx, b.origin, clone, b.relicCount()); err != nil {
 				return err
 			}
 		}
@@ -696,10 +783,37 @@ func (b *relicBench) publishAndClone() error {
 	})
 }
 
-// cloneOrigin makes a plain clone of the origin with the fixture's isolation
+// publishRelicFixture makes a bare origin and pushes source's Workbook refs to
+// it.
+func publishRelicFixture(ctx context.Context, spec RelicRunSpec, source, origin string) error {
+	if err := initBareFixtureOrigin(ctx, spec.FixtureTimeout, spec.Fixture.ObjectFormat, origin); err != nil {
+		return err
+	}
+	if _, _, err := runRepositoryGit(ctx, spec.FixtureTimeout, source, "remote", "add", "origin", origin); err != nil {
+		return err
+	}
+	_, _, err := runRepositoryGit(ctx, spec.FixtureTimeout, source, "push", "--quiet", "origin", "refs/workbook/*:refs/workbook/*")
+	return err
+}
+
+// setUpClone clones origin to destination, sets it up and indexes its relics,
+// of which it must then list relics.
+func (b *relicBench) setUpClone(ctx context.Context, origin, destination string, relics int) error {
+	if err := cloneRelicOrigin(ctx, origin, destination); err != nil {
+		return err
+	}
+	name := filepath.Base(destination)
+	if _, err := b.run.untimed("set up "+name, destination, []string{"setup", "--json"}, nil); err != nil {
+		return err
+	}
+	_, err := b.run.untimed("index "+name, destination, []string{"relic", "list", "--json"}, verifyRelicListCount(relics))
+	return err
+}
+
+// cloneRelicOrigin makes a plain clone of origin with the fixture's isolation
 // settings. A clone fetches no Workbook refs; setup does.
-func (b *relicBench) cloneOrigin(ctx context.Context, destination string) error {
-	if err := runFixtureGitInRoot(ctx, destination, "clone", "--quiet", b.origin, destination); err != nil {
+func cloneRelicOrigin(ctx context.Context, origin, destination string) error {
+	if err := runFixtureGitInRoot(ctx, destination, "clone", "--quiet", origin, destination); err != nil {
 		return err
 	}
 	return configureFixtureRepository(ctx, destination)
@@ -939,17 +1053,9 @@ func relicReverseLookups(fixture RelicFixture) []relicRead {
 func (b *relicBench) editInCloneB(first, count int) error {
 	ctx, cancel := context.WithTimeout(b.run.ctx, b.run.spec.FixtureTimeout)
 	defer cancel()
-	repository, err := gitstore.Open(ctx, b.cloneB)
+	_, service, err := b.relicServiceIn(ctx, b.cloneB)
 	if err != nil {
 		return err
-	}
-	service := core.RelicService{
-		Config: b.fixture.Config,
-		Reader: repository,
-		Writer: repository,
-		Tasks:  repository,
-		IDs:    core.CryptoULIDSource{Now: time.Now},
-		Actor:  benchmarkActorID,
 	}
 	relics := b.run.spec.Relics
 	for offset := range count {
@@ -1009,13 +1115,172 @@ func (b *relicBench) measureRemote() error {
 	return nil
 }
 
+// mergeFixture is what the merge scenarios sync: two clones of an origin of
+// their own, holding the relic fixture beside relics the clones save apart.
+// first saves and publishes, and second, whose syncs are timed, saves from the
+// versions it held before.
+type mergeFixture struct {
+	first, second string
+	relics        []mergeRelic
+	repetitive    mergeRelic
+}
+
+// measureMerges measures the two scenarios that sync body saves to be merged.
+// Their relics are in a copy of the fixture with an origin of its own, so they
+// are in no other scenario's repository and in neither storage figure.
+func (b *relicBench) measureMerges() error {
+	merges, err := b.buildMergeFixture()
+	if err != nil {
+		return err
+	}
+	if err := b.measureMergeSamples(merges); err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Join(b.root, "merges"))
+}
+
+func (b *relicBench) buildMergeFixture() (mergeFixture, error) {
+	spec := b.run.spec
+	root := filepath.Join(b.root, "merges")
+	source, origin := filepath.Join(root, "main"), filepath.Join(root, "origin.git")
+	merges := mergeFixture{first: filepath.Join(root, "first"), second: filepath.Join(root, "second")}
+	if err := b.stage("merge-relics", func(ctx context.Context) error {
+		if err := os.CopyFS(source, os.DirFS(b.template)); err != nil {
+			return err
+		}
+		repository, service, err := b.relicServiceIn(ctx, source)
+		if err != nil {
+			return err
+		}
+		if merges.relics, merges.repetitive, err = createMergeRelics(ctx, service, spec.Relics); err != nil {
+			return err
+		}
+		repository.PackMovedRelicRefs(ctx)
+		return publishRelicFixture(ctx, spec, source, origin)
+	}); err != nil {
+		return mergeFixture{}, err
+	}
+	listed := b.relicCount() + len(merges.relics) + 1
+	err := b.stage("merge-clones", func(ctx context.Context) error {
+		for _, clone := range []string{merges.first, merges.second} {
+			if err := b.setUpClone(ctx, origin, clone, listed); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return merges, err
+}
+
+// measureMergeSamples measures each merge scenario once per sample, the many
+// relics and then the repetitive one.
+func (b *relicBench) measureMergeSamples(merges mergeFixture) error {
+	relics := b.run.spec.Relics
+	firstLine, secondLine := mergeEditLines(relics.MergeBodyLines)
+	lines := relics.RepetitiveBodyBytes / 2
+	for sample := 1; sample <= b.run.spec.Samples; sample++ {
+		mark := func(side string, line int) func([]byte) []byte {
+			return func(text []byte) []byte { return markLine(text, line, mergeMarker(side, sample)) }
+		}
+		if err := b.diverge("relic-sync-merge-100", merges, merges.relics,
+			mark("first", firstLine), mark("second", secondLine)); err != nil {
+			return err
+		}
+		if _, err := b.run.measure("relic-sync-merge-100", merges.second, []string{"sync", "--json"},
+			verifySyncMerged(len(merges.relics))); err != nil {
+			return err
+		}
+
+		// Each side saves two lines far apart, none touching the other
+		// side's. Each sample writes other letters than the one before it, so
+		// every save changes its lines.
+		change := func(letters string, changed ...int) func([]byte) []byte {
+			return func(text []byte) []byte {
+				return changeRepetitiveLines(text, letters[sample%len(letters)], changed...)
+			}
+		}
+		if err := b.diverge("relic-merge-repetitive-1mib", merges, []mergeRelic{merges.repetitive},
+			change("abcdefg", 9, lines-10), change("hijklmn", lines/4, lines*3/4)); err != nil {
+			return err
+		}
+		if err := b.run.measureMergeOrRefusal("relic-merge-repetitive-1mib", merges.second, merges.repetitive.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// diverge leaves the two clones holding different saves of each of relics, both
+// from the version origin holds: the first clone catches up, saves and
+// publishes, and the second saves without synchronizing.
+func (b *relicBench) diverge(name string, merges mergeFixture, relics []mergeRelic, first, second func([]byte) []byte) error {
+	if _, err := b.run.untimed(name+" catch up", merges.first, []string{"fetch", "--json"}, nil); err != nil {
+		return err
+	}
+	if err := b.saveMergeRelics(merges.first, relics, first); err != nil {
+		return err
+	}
+	if _, err := b.run.untimed(name+" publish", merges.first, []string{"sync", "--json"},
+		verifySyncRelics(true, len(relics))); err != nil {
+		return err
+	}
+	return b.saveMergeRelics(merges.second, relics, second)
+}
+
+// saveMergeRelics saves a changed body of each of relics in the clone at
+// directory, through the relic service in process, which synchronizes nothing,
+// as relic update --no-sync does not.
+func (b *relicBench) saveMergeRelics(directory string, relics []mergeRelic, change func([]byte) []byte) error {
+	ctx, cancel := context.WithTimeout(b.run.ctx, b.run.spec.FixtureTimeout)
+	defer cancel()
+	repository, service, err := b.relicServiceIn(ctx, directory)
+	if err != nil {
+		return err
+	}
+	for _, relic := range relics {
+		shown, err := service.Show(ctx, relic.address(), core.RelicShowOptions{Bodies: true})
+		if err != nil {
+			return err
+		}
+		if len(shown.Parts) != 1 || shown.Parts[0].Body == nil || shown.Parts[0].Body.Text == nil {
+			return fmt.Errorf("merge relic %s has no text body", relic.id)
+		}
+		body := shown.Parts[0].Body
+		if _, err := service.Update(ctx, relic.id, []core.RelicEdit{{
+			Kind: core.RelicEditPart, Part: relic.part, Base: body.Version,
+			Body: &core.RelicBodyInput{Format: relicFixtureBodyFormat, Content: change([]byte(*body.Text))},
+		}}); err != nil {
+			return fmt.Errorf("save relic %s in %s: %w", relic.id, filepath.Base(directory), err)
+		}
+	}
+	repository.PackMovedRelicRefs(ctx)
+	return nil
+}
+
+// relicServiceIn is a relic service over the repository at directory, as a
+// teammate's command would run there.
+func (b *relicBench) relicServiceIn(ctx context.Context, directory string) (*gitstore.Repository, core.RelicService, error) {
+	repository, err := gitstore.Open(ctx, directory)
+	if err != nil {
+		return nil, core.RelicService{}, err
+	}
+	return repository, core.RelicService{
+		Config: b.fixture.Config,
+		Reader: repository,
+		Writer: repository,
+		Tasks:  repository,
+		IDs:    core.CryptoULIDSource{Now: time.Now},
+		Actor:  benchmarkActorID,
+	}, nil
+}
+
 // measureFreshClones sets up, rebuilds and first reads a new clone per sample.
 func (b *relicBench) measureFreshClones() error {
 	run := b.run
 	for sample := range run.spec.Samples {
 		clone := filepath.Join(b.root, fmt.Sprintf("fresh-%03d", sample+1))
 		if err := b.stage(fmt.Sprintf("fresh-clone-%03d", sample+1), func(ctx context.Context) error {
-			return b.cloneOrigin(ctx, clone)
+			return cloneRelicOrigin(ctx, b.origin, clone)
 		}); err != nil {
 			return err
 		}
@@ -1187,14 +1452,15 @@ func copiedFixture(template string, fixture Fixture) func(context.Context, strin
 }
 
 // writeRelicMarkdown writes the ## Relics section: the fixture, the reorder
-// results, the Git commands of the reverse lookups and refreshes, storage
-// before and after by class, and the task comparison.
+// results, the Git commands of the reverse lookups, the refreshes, the fetch
+// and the merges, storage before and after by class, and the task comparison.
 func writeRelicMarkdown(w io.Writer, report *RelicBenchmarkReport) error {
 	if report == nil {
 		return nil
 	}
 	var out strings.Builder
 	fixture := report.Fixture
+	first, second := mergeEditLines(fixture.MergeBodyLines)
 	fmt.Fprintln(&out, "\n## Relics")
 	fmt.Fprintf(&out, "\nFixture: %d relics × %d parts of %d bytes, %d links to tasks and %d to parts of other relics each; a large relic of %d parts × %d bytes; body parts of %d and %d bytes; %d moves in updates of %d; %d changed relics per sync; seed %d.\n",
 		fixture.Relics, fixture.PartsPerRelic, fixture.BodyBytes, fixture.LinksPerRelic, fixture.RelicLinksPerRelic,
@@ -1204,6 +1470,8 @@ func writeRelicMarkdown(w io.Writer, report *RelicBenchmarkReport) error {
 		FullBodiesRelicParts(fixture), fixture.FullBodiesBytes, fixture.SmallBodyBytes, fixture.LargeBodyBytes)
 	fmt.Fprintf(&out, "The history and diff scenarios read a relic of one %d-byte part saved %d times after it was created, each save rewriting %d lines.\n",
 		fixture.HistoryBodyBytes, fixture.HistoryEdits, relicHistoryLinesPerEdit)
+	fmt.Fprintf(&out, "relic-sync-merge-100 times the sync of a clone that saved line %d of each of %d relics' %d-byte, %d-line body after another clone saved line %d and published; relic-merge-repetitive-1mib does the same for one %d-byte body of repeated lines. Both run on a copy of the fixture with an origin of its own.\n",
+		second, fixture.MergeRelics, fixture.MergeBodyBytes, fixture.MergeBodyLines, first, fixture.RepetitiveBodyBytes)
 	fmt.Fprintln(&out, "relic-linked-to-part-hot and relic-show-linked-part-hot look up the first part of the first relic, which every other relic links to once.")
 	fmt.Fprintln(&out, "Moves are written as several moves per commit, so storage per move is a lower bound.")
 
@@ -1225,6 +1493,7 @@ func writeRelicMarkdown(w io.Writer, report *RelicBenchmarkReport) error {
 	fmt.Fprintln(&out, "| --- | --- |")
 	for _, name := range relicSortedKeys(report.GitCommands) {
 		if !strings.HasPrefix(name, "relic-linked-to-") && !strings.HasPrefix(name, "relic-refresh-") &&
+			!strings.Contains(name, "-merge-") && name != "relic-fetch-100" &&
 			name != "task-show-linked-hot" && name != "relic-show-linked-part-hot" {
 			continue
 		}

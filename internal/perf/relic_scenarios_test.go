@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dgoings/workbook/internal/core"
+	"github.com/dgoings/workbook/internal/gitstore"
 )
 
 // Mutation witness: registering a relic scenario would put the full relic
@@ -33,9 +36,10 @@ func TestRelicScenariosAreNotInTheDefaultRegistry(t *testing.T) {
 	}
 	// The plan's 21, the four that measure the 1 MiB body save and the
 	// relic at the 16 MiB live-body limit, the three that measure history
-	// and diffs, and the two that look up what links to a part.
-	if len(RelicScenarioNames()) != 30 {
-		t.Fatalf("relic scenarios = %d, want 30", len(RelicScenarioNames()))
+	// and diffs, the two that look up what links to a part, and the two that
+	// measure a sync that merges bodies.
+	if len(RelicScenarioNames()) != 32 {
+		t.Fatalf("relic scenarios = %d, want 32", len(RelicScenarioNames()))
 	}
 	after := slices.Index(RelicScenarioNames(), "relic-body-1mib")
 	if want := []string{"relic-history-100", "relic-diff-latest-100kib", "relic-diff-first-last-100kib"}; !slices.Equal(RelicScenarioNames()[after+1:after+4], want) {
@@ -114,6 +118,179 @@ func TestRelicScenariosIncludePartLookups(t *testing.T) {
 	}
 }
 
+// Mutation witness: a merge scenario that is not registered, or that is timed
+// at a scale other than the story's, would leave the merge budgets unchecked.
+func TestRelicMergeScenariosAreRegistered(t *testing.T) {
+	t.Parallel()
+	names := []string{"relic-sync-merge-100", "relic-merge-repetitive-1mib"}
+	after := slices.Index(RelicScenarioNames(), "relic-refresh-100")
+	if got := RelicScenarioNames()[after+1 : after+3]; !slices.Equal(got, names) {
+		t.Fatalf("relic scenarios after relic-refresh-100 = %v, want %v", got, names)
+	}
+	full := FullRelicFixtureSpec()
+	if full.MergeRelics != 100 || full.MergeBodyBytes != 100*1024 || full.MergeBodyLines != 2500 ||
+		full.RepetitiveBodyBytes != 1024*1024 {
+		t.Fatalf("full merge scale = %d relics of %d bytes in %d lines, repetitive %d bytes; want 100, 100 KiB, 2,500 and 1 MiB",
+			full.MergeRelics, full.MergeBodyBytes, full.MergeBodyLines, full.RepetitiveBodyBytes)
+	}
+	if first, second := mergeEditLines(full.MergeBodyLines); first != 10 || second != 2000 {
+		t.Fatalf("full merge saves lines %d and %d, want 10 and 2000", first, second)
+	}
+
+	var markdown strings.Builder
+	report := &RelicBenchmarkReport{Fixture: full, GitCommands: map[string]map[string]int{}}
+	for _, name := range names {
+		report.GitCommands[name] = map[string]int{"cat-file": 1}
+	}
+	if err := writeRelicMarkdown(&markdown, report); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if !strings.Contains(markdown.String(), "| "+name+" | cat-file 1 |") {
+			t.Fatalf("Markdown lacks the Git commands of %s:\n%s", name, markdown.String())
+		}
+	}
+}
+
+// Mutation witness: a fixture whose two saves do not diverge, change the same
+// lines or leave nothing to merge on a second sample would time a sync that
+// merges nothing, or one that stops on a conflict, as the merge scenarios.
+func TestRelicMergeFixtureVerifies(t *testing.T) {
+	t.Parallel()
+	shared := sharedSmokeRelicFixtureFor(t)
+	root := t.TempDir()
+	template := filepath.Join(root, "template")
+	if err := os.CopyFS(template, os.DirFS(shared.Root)); err != nil {
+		t.Fatal(err)
+	}
+	spec := RelicRunSpec{
+		RunSpec: RunSpec{
+			Fixture:        shared.Spec.TaskFixture("sha1"),
+			WorkbookBinary: buildWorkbookBinary(t), Samples: 2,
+			CommandTimeout: 120 * time.Second, FixtureTimeout: 120 * time.Second,
+		},
+		Relics: shared.Spec,
+	}
+	run := &relicRun{
+		ctx:          context.Background(),
+		spec:         spec,
+		dependencies: relicDependencies{measureCommand: MeasureCommandOutput},
+		environment:  []string{"XDG_CONFIG_HOME=" + filepath.Join(t.TempDir(), "config")},
+		results:      map[string]*ScenarioResult{},
+		gitCommands:  map[string]map[string]int{},
+	}
+	bench := &relicBench{
+		run: run, root: root, template: template, fixture: shared,
+		report: &RelicBenchmarkReport{FixtureMilliseconds: map[string]float64{}},
+	}
+	merges, err := bench.buildMergeFixture()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(merges.relics) != shared.Spec.MergeRelics {
+		t.Fatalf("merge relics = %d, want %d", len(merges.relics), shared.Spec.MergeRelics)
+	}
+	if err := bench.measureMergeSamples(merges); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"relic-sync-merge-100", "relic-merge-repetitive-1mib"} {
+		result := run.results[name]
+		if result == nil || len(result.Samples) != spec.Samples {
+			t.Fatalf("%s samples = %+v, want %d", name, result, spec.Samples)
+		}
+		for _, sample := range result.Samples {
+			if !sampleSucceeded(sample) {
+				t.Fatalf("%s failed: exit code %d: %s", name, sample.ExitCode, sample.Error)
+			}
+		}
+		if run.gitCommands[name]["cat-file"] == 0 {
+			t.Fatalf("%s git commands = %v, want its cat-file reads", name, run.gitCommands[name])
+		}
+	}
+
+	// Each sample's two saves are in the merged body the second clone holds
+	// after the last of them.
+	repository, err := gitstore.Open(context.Background(), merges.second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := core.RelicService{Config: shared.Config, Reader: repository, Writer: repository, Tasks: repository}
+	for _, relic := range merges.relics {
+		text := mergeRelicText(t, service, relic)
+		lines := strings.Split(text, "\n")
+		first, second := mergeEditLines(shared.Spec.MergeBodyLines)
+		if !strings.HasPrefix(lines[first-1], "first 2 ") || !strings.HasPrefix(lines[second-1], "second 2 ") {
+			t.Fatalf("merged lines %d and %d = %q and %q, want both saves of the last sample",
+				first, second, lines[first-1], lines[second-1])
+		}
+		if len(text) != shared.Spec.MergeBodyBytes || len(lines) != shared.Spec.MergeBodyLines+1 {
+			t.Fatalf("merged body is %d bytes in %d lines", len(text), len(lines)-1)
+		}
+	}
+	repetitive := mergeRelicText(t, service, merges.repetitive)
+	if len(repetitive) != shared.Spec.RepetitiveBodyBytes {
+		t.Fatalf("repetitive body is %d bytes, want %d", len(repetitive), shared.Spec.RepetitiveBodyBytes)
+	}
+	// The last sample's two lines from each side. Where lines moved among
+	// identical ones, an earlier sample's can be left too, as git merge-file
+	// leaves it, so only this sample's are counted.
+	saved := map[string]int{}
+	for _, line := range strings.Split(repetitive, "\n") {
+		saved[line]++
+	}
+	if saved["c"] != 2 || saved["j"] != 2 {
+		t.Fatalf("repetitive body holds %d and %d of the last sample's two saves, want 2 of each", saved["c"], saved["j"])
+	}
+}
+
+func mergeRelicText(t *testing.T, service core.RelicService, relic mergeRelic) string {
+	t.Helper()
+	shown, err := service.Show(context.Background(), relic.address(), core.RelicShowOptions{Bodies: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shown.Parts) != 1 || shown.Parts[0].Body == nil || shown.Parts[0].Body.Text == nil {
+		t.Fatalf("relic %s shows %+v, want one text body", relic.id, shown.Parts)
+	}
+	return *shown.Parts[0].Body.Text
+}
+
+// Mutation witness: counting a refused merge as a failure only when its
+// output does not say why would let the repetitive scenario time a command
+// that failed for another reason.
+func TestRelicMergeRefusalCountsOnlyWhenItIsTheDocumentedOne(t *testing.T) {
+	t.Parallel()
+	refusal := `{"format":"workbook.result","version":1,"command":"sync","data":{"fetch":{"relics":[{"relicId":"R","status":"conflicted"}]}},` +
+		`"relicConflict":[{"relicId":"R","type":"body","body":{"reason":"too-many-changes"}}]}`
+	for _, test := range []struct {
+		name     string
+		exit     int
+		stdout   string
+		accepted bool
+	}{
+		{"documented refusal", 8, refusal, true},
+		{"another reason", 8, strings.Replace(refusal, "too-many-changes", "overlap", 1), false},
+		{"another relic", 8, strings.ReplaceAll(refusal, `"R"`, `"S"`), false},
+		{"another exit code", 1, refusal, false},
+	} {
+		run := fakeRelicRun(test.stdout)
+		run.dependencies.measureCommand = func(context.Context, CommandSpec) CommandMeasurement {
+			return CommandMeasurement{
+				Sample: Sample{ExitCode: test.exit, Error: "conflict", GitProcesses: 1},
+				Stdout: []byte(test.stdout),
+			}
+		}
+		err := run.measureMergeOrRefusal("relic-merge-repetitive-1mib", t.TempDir(), "R")
+		if err != nil {
+			t.Fatalf("%s: %v", test.name, err)
+		}
+		sample := run.results["relic-merge-repetitive-1mib"].Samples[0]
+		if sampleSucceeded(sample) != test.accepted {
+			t.Fatalf("%s: sample = %+v, want succeeded %v", test.name, sample, test.accepted)
+		}
+	}
+}
+
 // fakeRelicRun is a relic run whose measured command answers with stdout.
 func fakeRelicRun(stdout string) *relicRun {
 	return &relicRun{
@@ -159,6 +336,16 @@ func TestRelicScenariosCheckTheirOutput(t *testing.T) {
 		return `{"kind":"changed","body":{"text":true,"hunks":[{"lines":[` + strings.Join(lines, ",") +
 			`]},{"lines":[` + strings.Join(inserts, ",") + `]}]}}`
 	}
+	// merged is a sync that reconciled relics relics with warnings merge
+	// warnings, and the conflicts in conflict.
+	merged := func(relics, warnings int, conflict string) string {
+		list := func(count int, item string) string {
+			return "[" + strings.TrimSuffix(strings.Repeat(item+",", count), ",") + "]"
+		}
+		return `{"format":"workbook.result","version":1,"command":"sync","data":{"fetch":{"relics":` +
+			list(relics, `{"relicId":"R","status":"reconciled"}`) + `}},"warnings":` +
+			list(warnings, `{"code":"relic-body-merged","message":"m"}`) + `,"relicConflict":[` + conflict + `]}`
+	}
 	exact := changed(5, 5)
 	latest, firstLast := verifyRelicBodyDiff(5), verifyRelicBodyDiff(50)
 	tests := []struct {
@@ -186,6 +373,10 @@ func TestRelicScenariosCheckTheirOutput(t *testing.T) {
 		{"relic-diff-latest-100kib", diffOf(changed(1, 0)), latest},
 		{"relic-diff-first-last-100kib", diffOf(changed(51, 50)), firstLast},
 		{"relic-diff-first-last-100kib", diffOf(changed(50, 51)), firstLast},
+		{"relic-sync-merge-100", merged(1, 2, ""), verifySyncMerged(2)},
+		{"relic-sync-merge-100", merged(2, 1, ""), verifySyncMerged(2)},
+		{"relic-sync-merge-100", merged(2, 2, `{"relicId":"R","type":"body"}`), verifySyncMerged(2)},
+		{"relic-merge-repetitive-1mib", merged(0, 0, ""), verifySyncMerged(1)},
 	}
 	for _, test := range tests {
 		run := fakeRelicRun(test.stdout)
@@ -205,6 +396,9 @@ func TestRelicScenariosCheckTheirOutput(t *testing.T) {
 		}
 	}
 
+	if err := verifySyncMerged(2)([]byte(merged(2, 2, ""))); err != nil {
+		t.Fatal(err)
+	}
 	if err := verifyRelicHistory(11)([]byte(historyOf(11, 11))); err != nil {
 		t.Fatal(err)
 	}

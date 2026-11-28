@@ -552,6 +552,7 @@ func TestRelicFixtureSpecsMatchTheStoryTable(t *testing.T) {
 		Moves: 10000, MovesPerUpdate: 100, ChangedRelics: 100, Seed: full.Seed,
 		FullBodiesBytes:  core.MaxRelicLiveBodyBytes,
 		HistoryBodyBytes: 100 << 10, HistoryEdits: 100,
+		MergeRelics: 100, MergeBodyBytes: 100 << 10, MergeBodyLines: 2500, RepetitiveBodyBytes: 1 << 20,
 	}
 	if full != wantFull {
 		t.Fatalf("full spec = %+v, want %+v", full, wantFull)
@@ -563,6 +564,7 @@ func TestRelicFixtureSpecsMatchTheStoryTable(t *testing.T) {
 		Moves: 200, MovesPerUpdate: 50, ChangedRelics: 5, Seed: smoke.Seed,
 		FullBodiesBytes:  256 << 10,
 		HistoryBodyBytes: 16 << 10, HistoryEdits: 10,
+		MergeRelics: 5, MergeBodyBytes: 8 << 10, MergeBodyLines: 200, RepetitiveBodyBytes: 64 << 10,
 	}
 	if smoke != wantSmoke {
 		t.Fatalf("smoke spec = %+v, want %+v", smoke, wantSmoke)

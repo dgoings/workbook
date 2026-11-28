@@ -32,6 +32,9 @@ const (
 	// relicHistoryLinesPerEdit is how many lines each save of the history
 	// relic rewrites.
 	relicHistoryLinesPerEdit = 5
+	// relicMergeFirstLine is the line the first clone saves in each merge
+	// relic; see mergeEditLines.
+	relicMergeFirstLine = 10
 )
 
 // relicFixtureTypes are the relic types the fixture relics take in turn. None
@@ -72,6 +75,15 @@ type RelicFixtureSpec struct {
 	// HistoryEdits how many times it is saved after it is created.
 	HistoryBodyBytes int `json:"historyBodyBytes"`
 	HistoryEdits     int `json:"historyEdits"`
+	// MergeRelics is how many relics relic-sync-merge-100 has both clones
+	// save, each a body of MergeBodyBytes in MergeBodyLines lines, and
+	// RepetitiveBodyBytes the size of the one body of repeated short lines
+	// relic-merge-repetitive-1mib merges. Neither set is part of the fixture
+	// the other scenarios read; the scenarios build it in a copy.
+	MergeRelics         int `json:"mergeRelics"`
+	MergeBodyBytes      int `json:"mergeBodyBytes"`
+	MergeBodyLines      int `json:"mergeBodyLines"`
+	RepetitiveBodyBytes int `json:"repetitiveBodyBytes"`
 }
 
 // FullRelicFixtureSpec is the story's scale.
@@ -83,6 +95,7 @@ func FullRelicFixtureSpec() RelicFixtureSpec {
 		Moves: 10000, MovesPerUpdate: 100, ChangedRelics: 100, Seed: 1,
 		FullBodiesBytes:  core.MaxRelicLiveBodyBytes,
 		HistoryBodyBytes: 100 * 1024, HistoryEdits: 100,
+		MergeRelics: 100, MergeBodyBytes: 100 * 1024, MergeBodyLines: 2500, RepetitiveBodyBytes: 1024 * 1024,
 	}
 }
 
@@ -95,6 +108,7 @@ func SmokeRelicFixtureSpec() RelicFixtureSpec {
 		Moves: 200, MovesPerUpdate: 50, ChangedRelics: 5, Seed: 1,
 		FullBodiesBytes:  256 * 1024,
 		HistoryBodyBytes: 16 * 1024, HistoryEdits: 10,
+		MergeRelics: 5, MergeBodyBytes: 8 * 1024, MergeBodyLines: 200, RepetitiveBodyBytes: 64 * 1024,
 	}
 }
 
@@ -120,6 +134,8 @@ func validateRelicFixtureSpec(spec RelicFixtureSpec, tasks Fixture) error {
 		{"large part body bytes", spec.LargePartBodyBytes}, {"large body bytes", spec.LargeBodyBytes},
 		{"small body bytes", spec.SmallBodyBytes}, {"moves per update", spec.MovesPerUpdate},
 		{"history body bytes", spec.HistoryBodyBytes}, {"history edits", spec.HistoryEdits},
+		{"merge relics", spec.MergeRelics}, {"merge body bytes", spec.MergeBodyBytes},
+		{"merge body lines", spec.MergeBodyLines}, {"repetitive body bytes", spec.RepetitiveBodyBytes},
 	} {
 		if count.value < 1 {
 			return fmt.Errorf("relic fixture %s must be positive", count.name)
@@ -139,6 +155,17 @@ func validateRelicFixtureSpec(spec RelicFixtureSpec, tasks Fixture) error {
 	if spec.RelicLinksPerRelic >= spec.Relics {
 		return fmt.Errorf("relic fixture relic links per relic (%d) must be fewer than relics (%d): they point at other relics",
 			spec.RelicLinksPerRelic, spec.Relics)
+	}
+	// The two saves of a merge relic change lines that do not touch, and each
+	// line holds the words that mark a save.
+	if first, second := mergeEditLines(spec.MergeBodyLines); second <= first+1 {
+		return fmt.Errorf("relic fixture merge body lines (%d) must leave the two saved lines apart", spec.MergeBodyLines)
+	}
+	if spec.MergeBodyBytes/spec.MergeBodyLines < len(mergeMarker("second", 999))+1 {
+		return fmt.Errorf("relic fixture merge body bytes (%d) are too few for %d lines", spec.MergeBodyBytes, spec.MergeBodyLines)
+	}
+	if spec.RepetitiveBodyBytes%2 != 0 || spec.RepetitiveBodyBytes < 64 {
+		return fmt.Errorf("relic fixture repetitive body bytes (%d) must be even and at least 64", spec.RepetitiveBodyBytes)
 	}
 	if spec.LargeParts < 2 {
 		return fmt.Errorf("relic fixture large parts must be at least 2 to move one")
@@ -593,4 +620,93 @@ func seededWords(random *rand.Rand, size int) []byte {
 		}
 	}
 	return []byte(text.String()[:size])
+}
+
+// mergeEditLines are the lines, counted from 1, the two saves of a merge relic
+// of lines lines change: line 10 on the first clone and the line four fifths
+// of the way down on the second, line 2,000 of 2,500.
+func mergeEditLines(lines int) (first, second int) {
+	return relicMergeFirstLine, lines * 4 / 5
+}
+
+// mergeBody is a body of exactly size bytes in lines lines of seeded words,
+// each ending in a line break.
+func mergeBody(random *rand.Rand, size, lines int) []byte {
+	var text bytes.Buffer
+	text.Grow(size)
+	for line := range lines {
+		width := size / lines
+		if line < size%lines {
+			width++
+		}
+		words := bytes.ReplaceAll(seededWords(random, width-1), []byte{'\n'}, []byte{' '})
+		text.Write(words)
+		text.WriteByte('\n')
+	}
+	return text.Bytes()
+}
+
+// mergeMarker starts the line side's save of sample sample writes.
+func mergeMarker(side string, sample int) string {
+	return fmt.Sprintf("%s %d ", side, sample)
+}
+
+// markLine returns text with the start of line number, counted from 1,
+// overwritten by marker. The line keeps its length, so the body keeps its size.
+func markLine(text []byte, number int, marker string) []byte {
+	lines := bytes.Split(slices.Clone(text), []byte{'\n'})
+	copy(lines[number-1], marker)
+	return bytes.Join(lines, []byte{'\n'})
+}
+
+// repetitiveBody is size bytes of the line "x", the most repetitive text a
+// body can hold.
+func repetitiveBody(size int) []byte {
+	return bytes.Repeat([]byte("x\n"), size/2)
+}
+
+// changeRepetitiveLines returns a repetitive body with each of the lines,
+// counted from 0, replaced by letter, so the body keeps its size.
+func changeRepetitiveLines(text []byte, letter byte, lines ...int) []byte {
+	changed := slices.Clone(text)
+	for _, line := range lines {
+		changed[2*line] = letter
+	}
+	return changed
+}
+
+// mergeRelic is a relic of one part that the merge scenarios have two clones
+// save.
+type mergeRelic struct{ id, part string }
+
+func (m mergeRelic) address() string { return m.id + "#" + m.part }
+
+// createMergeRelics writes the merge relics and the repetitive one through
+// service, one create each.
+func createMergeRelics(ctx context.Context, service core.RelicService, spec RelicFixtureSpec) (relics []mergeRelic, repetitive mergeRelic, err error) {
+	words := rand.New(rand.NewSource(spec.Seed + 32))
+	create := func(title, relicType string, body []byte) (mergeRelic, error) {
+		created, err := service.Create(ctx, core.RelicCreateInput{
+			Title: title,
+			Type:  relicType,
+			Parts: []core.RelicPartInput{{
+				Type: relicFixturePartType,
+				Body: &core.RelicBodyInput{Format: relicFixtureBodyFormat, Content: body},
+			}},
+		})
+		if err != nil {
+			return mergeRelic{}, fmt.Errorf("create %s: %w", title, err)
+		}
+		return mergeRelic{id: created.Relic.ID, part: created.Parts[0].ID}, nil
+	}
+	for index := range spec.MergeRelics {
+		relic, err := create(fmt.Sprintf("Benchmark merge relic %03d", index),
+			relicFixtureTypes[index%len(relicFixtureTypes)], mergeBody(words, spec.MergeBodyBytes, spec.MergeBodyLines))
+		if err != nil {
+			return nil, mergeRelic{}, err
+		}
+		relics = append(relics, relic)
+	}
+	repetitive, err = create("Benchmark repetitive relic", "note", repetitiveBody(spec.RepetitiveBodyBytes))
+	return relics, repetitive, err
 }

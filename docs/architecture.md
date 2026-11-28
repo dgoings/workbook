@@ -2158,6 +2158,8 @@ Spotlight indexing used about two and a half cores during the run.
 | | `relic-list-type` | 124 ms | 500 ms | benchmark |
 | Fetch | `relic-clone-setup` | 2,802 ms | under 60 s | design ("never minutes") |
 | | `relic-fetch-100` | 774 ms | under 60 s | design |
+| Merge | `relic-sync-merge-100` | not yet measured | under 3,000 ms; Git processes at most 1.5 × `relic-fetch-100`'s, plus 100 | benchmark |
+| | `relic-merge-repetitive-1mib` | not yet measured | under 1,000 ms | benchmark |
 | Bodies at their limits | `relic-create-16mib` | 333 ms | | |
 | | `relic-show-16mib` | 98 ms | | |
 | | `relic-edit-part-16mib` | 340 ms | | |
@@ -2167,6 +2169,17 @@ Spotlight indexing used about two and a half cores during the run.
 | History and diffs | `relic-history-100` | not yet measured | 300 ms | benchmark |
 | | `relic-diff-latest-100kib` | not yet measured | 300 ms | benchmark |
 | | `relic-diff-first-last-100kib` | not yet measured | 500 ms | benchmark |
+
+The two merge scenarios were added after that run too. Each times the `sync`
+of a clone whose body saves have to be merged onto saves another clone
+published: `relic-sync-merge-100` saves line 2,000 of each of 100 relics'
+100 KiB, 2,500-line body after the other clone saved line 10, and
+`relic-merge-repetitive-1mib` saves two lines of one 1 MiB body of `x` lines
+after the other clone saved two others. The second counts a sync that refuses
+the merge as `too-many-changes` as completed too. The extra Git processes in the
+first's budget are one batch read for each merged relic. Both run in a copy of
+the fixture with an origin of its own, so their relics are in no other
+scenario's repository.
 
 The last three scenarios were added after that run and are not part of it. They
 list the history, with `--all`, of a part whose 100 KiB body was saved 100 times
