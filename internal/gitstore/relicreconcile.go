@@ -846,7 +846,7 @@ func relicCannotCombine(relicID, remote string) error {
 // gave way to origin's history.
 func relicCompactionDroppedWarning(relicID, remote string) core.Warning {
 	return core.Warning{
-		Code: WarningRelicCompactionDropped,
+		Code: core.WarningRelicCompactionDropped,
 		Message: fmt.Sprintf("relic %s: this clone compacted it, but %s changed it before the checkpoint was published, "+
 			"so the compaction was dropped and %s's history kept, with every change the checkpoint replaced and "+
 			"this clone's later changes replayed onto it; run `workbook compact --relics` to compact it again",

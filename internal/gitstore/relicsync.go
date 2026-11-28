@@ -37,12 +37,6 @@ import (
 // only copy of the text that was not applied.
 const relicParkedRefPrefix = "refs/workbook/reconciled-relics/"
 
-// WarningRelicCompactionDropped says that this clone's checkpoint of a relic
-// was never published and origin's history of the relic moved on, so the fetch
-// dropped the checkpoint and kept origin's history, which holds every change
-// the checkpoint replaced. Compacting the relic again is what remains.
-const WarningRelicCompactionDropped = "relic-compaction-dropped"
-
 // relicFetchReflogMessage opens the reflog message of the relic transaction.
 // The remote's name follows it.
 const relicFetchReflogMessage = "workbook: fetch relics from "

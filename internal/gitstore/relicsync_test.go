@@ -2058,10 +2058,10 @@ func TestUnpublishedRelicCheckpointDroppedWhenOriginMovedOn(t *testing.T) {
 		assertRelicSyncOutcome(t, synced.Fetch, relicID, SyncReconciled)
 		assertRelicSyncOutcome(t, synced.Push, relicID, SyncPublished)
 		warnings := synced.Fetch.RelicWarnings
-		if len(warnings) != 1 || warnings[0].Code != WarningRelicCompactionDropped ||
+		if len(warnings) != 1 || warnings[0].Code != core.WarningRelicCompactionDropped ||
 			!strings.Contains(warnings[0].Message, relicID) || !strings.Contains(warnings[0].Message, "compact") {
 			t.Fatalf("warnings = %+v, want one %s naming the relic and saying to compact again",
-				warnings, WarningRelicCompactionDropped)
+				warnings, core.WarningRelicCompactionDropped)
 		}
 		head := relicRefHead(t, first, relicID)
 		if got := relicParents(t, first, head); len(got) != 1 || got[0] != theirs.Head {
