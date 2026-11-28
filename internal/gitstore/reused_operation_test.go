@@ -2,6 +2,7 @@ package gitstore
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -140,7 +141,21 @@ func TestMoveTasksNamesTheTaskItCouldNotCopyAndWhy(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("MoveTasks() error = %q, want it to contain %q", err, want)
 		}
+		if said := outermostMessage(t, err); !strings.Contains(said, want) {
+			t.Fatalf("MoveTasks() outermost message = %q, want it to contain %q: a command prints no more than this", said, want)
+		}
 	}
+}
+
+// outermostMessage is the part of a refusal a command prints: the message of
+// the outermost error, without its causes.
+func outermostMessage(t *testing.T, err error) string {
+	t.Helper()
+	var typed *core.Error
+	if !errors.As(err, &typed) {
+		t.Fatalf("error %v is not a core.Error", err)
+	}
+	return typed.Message
 }
 
 // Verification compares content too: a new place that, by the time the run

@@ -187,6 +187,9 @@ func TestMoveTasksNamesTheRelicItCouldNotCopyAndWhy(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("MoveTasks() error = %q, want it to contain %q", err, want)
 		}
+		if said := outermostMessage(t, err); !strings.Contains(said, want) {
+			t.Fatalf("MoveTasks() outermost message = %q, want it to contain %q: a command prints no more than this", said, want)
+		}
 	}
 }
 

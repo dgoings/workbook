@@ -3,6 +3,7 @@ package gitstore
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -634,7 +635,7 @@ func (r *Repository) moveCopy(
 ) (SyncRunResult, error) {
 	run, err := r.syncDestination(ctx, config, to, result)
 	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
-		return run, wrapKeepingCategory("cannot copy the tasks to "+to, err)
+		return run, copyFailure(to, err)
 	}
 	changed, err := r.carryFromTracking(ctx, config, from, carried, result)
 	if err != nil {
@@ -645,7 +646,7 @@ func (r *Repository) moveCopy(
 	}
 	run, err = r.syncDestination(ctx, config, to, result)
 	if err != nil && core.CategoryOf(err) != core.CategoryConflict {
-		return run, wrapKeepingCategory("cannot copy the tasks to "+to, err)
+		return run, copyFailure(to, err)
 	}
 	return run, nil
 }
@@ -1954,6 +1955,26 @@ func (r *Repository) checkMoveFinished(ctx context.Context, to core.TasksRemoteS
 		}
 		return notMoved(place)
 	}
+}
+
+// copyFailure says which place the tasks could not be copied to, and why. A
+// command prints only the outermost message of a refusal that is not
+// operational, and "cannot copy the tasks" alone names neither the task or
+// relic nor the reason, so the reason is said in that message. A refusal about
+// the tasks remote is left wrapped: a command finds it by its type and says it
+// as written.
+func copyFailure(to string, err error) error {
+	message := "cannot copy the tasks to " + to
+	category := core.CategoryOf(err)
+	if category == "" || category == core.CategoryOperational {
+		return wrapKeepingCategory(message, err)
+	}
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if typed, ok := current.(*core.Error); ok && typed.TasksRemote != nil {
+			return wrapKeepingCategory(message, err)
+		}
+	}
+	return core.Errorf(category, "%s: %v", message, err)
 }
 
 // wrapKeepingCategory adds context to err without changing its exit code.
