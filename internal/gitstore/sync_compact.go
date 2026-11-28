@@ -61,8 +61,9 @@ func cannotCombineDetail(remote, title, taskID string) string {
 		title, remote, taskID, remote)
 }
 
-// leasedPush describes one ref pushed as a deliberate non-fast-forward.
-type leasedPush struct{ TaskID, Local, ExpectedRemote string }
+// leasedPush describes one ref pushed as a deliberate non-fast-forward: a
+// task's when TaskID is set, and a relic's when RelicID is.
+type leasedPush struct{ TaskID, RelicID, Local, ExpectedRemote string }
 
 // compactionLease decides whether publishing local over origin's remoteHead is
 // the deliberate non-fast-forward a compaction makes.

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -779,5 +780,340 @@ func TestMoveVerificationErrorNamesKeysOnlyTheOldPlaceHas(t *testing.T) {
 	if err := moveVerificationError("origin", "tasks", []string{"AA-1 (absent)"}, nil); err == nil ||
 		err.Error() != "tasks does not hold everything origin holds: AA-1 (absent); run workbook move-tasks again" {
 		t.Fatalf("moveVerificationError with no unseen key = %v", err)
+	}
+}
+
+// relicOperationsHeld is every operation ID the relic history at ref in repo
+// (a checkout or a bare place) holds as a change: each operation on its
+// chain, and each one its root checkpoint lists as replaced. A checkpoint's
+// own history.checkpoint operation records no one's change and is left out.
+func relicOperationsHeld(t *testing.T, repo, ref string) map[string]bool {
+	t.Helper()
+	held := map[string]bool{}
+	for _, commit := range strings.Fields(syncGit(t, repo, "rev-list", ref)) {
+		pack, err := core.DecodeRelicOperationPack([]byte(syncGit(t, repo, "cat-file", "blob", commit+":operation.json") + "\n"))
+		if err != nil {
+			t.Fatalf("DecodeRelicOperationPack(%s) error = %v", commit, err)
+		}
+		if summary, ok := pack.Checkpoint(); ok {
+			for _, id := range summary.CompactedOperations {
+				held[id] = true
+			}
+			continue
+		}
+		for _, operation := range pack.Operations {
+			held[operation.ID] = true
+		}
+	}
+	return held
+}
+
+// requireHoldsEveryOperation requires the operation IDs at got to include every
+// one of want.
+func requireHoldsEveryOperation(t *testing.T, what string, got, want map[string]bool) {
+	t.Helper()
+	if len(want) == 0 {
+		t.Fatalf("%s: the history to compare against holds no operation", what)
+	}
+	for id := range want {
+		if !got[id] {
+			t.Errorf("%s lacks operation %s; holds %v, want every one of %v", what, id, sorted(keysOf(got)), sorted(keysOf(want)))
+		}
+	}
+}
+
+func keysOf(set map[string]bool) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+// relicCheckpointReplacing compacts the relic whose ref is at older's chain
+// into a checkpoint built by the real builder, after moving the ref to tip
+// (an older or other history of it written earlier in the same repository).
+func relicCheckpointReplacing(t *testing.T, repo *Repository, config core.ProjectConfig, tip core.RelicSnapshot, offset int) core.RelicSnapshot {
+	t.Helper()
+	syncGit(t, repo.Root, "update-ref", relicRef(tip.Record.State.RelicID), tip.Head)
+	return writeRelicCheckpointNumbered(t, repo, config, tip, core.RelicBoundaryRetired, offset)
+}
+
+// The move's "holds every operation" check counts an operation a checkpoint
+// on the other side lists as held, by ID, and lets a checkpoint of its own
+// side stand for the operations it lists: a checkpoint that another one
+// superseded without listing it (a second compaction of the same history)
+// holds nothing the other lacks. A real change, any operation that is not a
+// history.checkpoint, is held only when the other side has it or lists it.
+func TestRelicChangesNotHeldCountsWhatACheckpointLists(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, repo *Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		retired := relicToCompact(t, repo, config, 1, false)
+		relicID := retired.Record.State.RelicID
+		late := writeRelicChild(t, repo, config, retired, nil, relicTitleSet(730001, "Late edit to the old copy"))
+		first := relicCheckpointReplacing(t, repo, config, retired, 0)
+		afterFirst := writeRelicChild(t, repo, config, first, nil, relicTitleSet(730002, "Edit after the compaction"))
+		second := relicCheckpointReplacing(t, repo, config, retired, 40)
+		if first.Head == second.Head || first.Operation.Operations[0].ID == second.Operation.Operations[0].ID {
+			t.Fatalf("the two checkpoints are the same: %s", first.Head)
+		}
+		for _, tc := range []struct {
+			name   string
+			tip    string
+			others []string
+			want   int
+		}{
+			{"old history, checkpoint lists it", retired.Head, []string{first.Head}, 0},
+			{"old history with a late edit the checkpoint does not list", late.Head, []string{first.Head}, 1},
+			{"checkpoint superseded by another that does not list it", first.Head, []string{second.Head}, 0},
+			{"edit above a superseded checkpoint", afterFirst.Head, []string{second.Head}, 1},
+			{"checkpoint against the history it replaced", first.Head, []string{retired.Head}, 0},
+			{"checkpoint against nothing", first.Head, nil, 1},
+			{"checkpoint against a part of what it lists", first.Head, []string{late.Head + "~2"}, 1},
+		} {
+			others := make([]string, 0, len(tc.others))
+			for _, other := range tc.others {
+				others = append(others, syncGit(t, repo.Root, "rev-parse", other))
+			}
+			got, err := repo.relicChangesNotHeld(ctx, config, relicID, tc.tip, others)
+			if err != nil {
+				t.Fatalf("%s: relicChangesNotHeld() error = %v", tc.name, err)
+			}
+			if got != tc.want {
+				t.Errorf("%s: relicChangesNotHeld() = %d, want %d", tc.name, got, tc.want)
+			}
+		}
+	})
+}
+
+// A relic compacted in this checkout and not yet published to the old place
+// is carried as its checkpoint, and the verification counts the operations
+// the checkpoint lists as held at the new place. One compacted and published
+// at the old place is carried as it is there.
+func TestMoveCarriesCompactedRelic(t *testing.T) {
+	t.Parallel()
+	for _, objectFormat := range []string{testrepo.FormatSHA1, testrepo.FormatSHA256} {
+		t.Run(objectFormat, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			fixture := newMoveFixture(t, objectFormat)
+			published := relicToCompact(t, fixture.second, fixture.stale, 1, false)
+			unpublished := relicToCompact(t, fixture.second, fixture.stale, 2, true)
+			if _, err := fixture.second.Sync(ctx, fixture.stale); err != nil {
+				t.Fatal(err)
+			}
+			compactedThere := writeRelicCheckpoint(t, fixture.second, fixture.stale, published, core.RelicBoundaryRetired)
+			if _, err := fixture.second.Sync(ctx, fixture.stale); err != nil {
+				t.Fatal(err)
+			}
+			if got := syncGit(t, fixture.origin, "rev-parse", relicRef(published.Record.State.RelicID)); got != compactedThere.Head {
+				t.Fatalf("origin holds the published relic at %s, want its checkpoint %s", got, compactedThere.Head)
+			}
+			ref := relicRef(unpublished.Record.State.RelicID)
+			syncGit(t, fixture.first.Root, "fetch", "--quiet", fixture.origin, ref+":"+ref)
+			compactedHere := writeRelicCheckpoint(t, fixture.first, fixture.config, unpublished, core.RelicBoundaryDeleted)
+			oldPlace := relicOperationsHeld(t, fixture.origin, ref)
+
+			result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
+			if err != nil {
+				t.Fatalf("MoveTasks() = %v", err)
+			}
+			if !result.Verified || result.Relics != 2 || result.RelicsIdentical != 1 || result.RelicsCarried != 1 {
+				t.Fatalf("MoveTasks() result = %+v, want one relic identical and the one compacted here carried", result)
+			}
+			for relicID, want := range map[string]string{
+				published.Record.State.RelicID: compactedThere.Head, unpublished.Record.State.RelicID: compactedHere.Head,
+			} {
+				if got := syncGit(t, fixture.tasks, "rev-parse", relicRef(relicID)); got != want {
+					t.Fatalf("tasks holds %s at %s, want the checkpoint %s", relicID, got, want)
+				}
+			}
+			if got := syncGit(t, fixture.origin, "rev-parse", ref); got != unpublished.Head {
+				t.Fatalf("origin holds %s at %s, want it left at %s", unpublished.Record.State.RelicID, got, unpublished.Head)
+			}
+			requireHoldsEveryOperation(t, "tasks", relicOperationsHeld(t, fixture.tasks, ref), oldPlace)
+		})
+	}
+}
+
+// movedRelicCompactedAway is a relic shared at origin, moved to tasks with the
+// tasks, retired there, compacted there into a checkpoint and published to
+// tasks, so origin still holds an ancestor of the history the checkpoint
+// replaced. It returns the moving checkout reopened on settings that name
+// origin again, its project, the relic's copy at origin and the checkpoint.
+func movedRelicCompactedAway(t *testing.T, fixture moveFixture) (*Repository, core.ProjectConfig, core.RelicSnapshot, core.RelicSnapshot) {
+	t.Helper()
+	ctx := context.Background()
+	older := writeRelicRootNumbered(t, fixture.second, fixture.stale, 1, relicTestPartNumbered(1))
+	older = writeRelicChild(t, fixture.second, fixture.stale, older, nil, relicTitleSet(731001, "Shared before the move"))
+	if _, err := fixture.second.Sync(ctx, fixture.stale); err != nil {
+		t.Fatal(err)
+	}
+	relicID := older.Record.State.RelicID
+	first, config := moveTo(t, fixture.first, core.TasksRemoteSetting{Name: "tasks", URL: fixture.tasks})
+	tip, err := first.GetRelic(ctx, config, relicID)
+	if err != nil || tip.Head != older.Head {
+		t.Fatalf("GetRelic() after the move = (%s, %v), want %s", tip.Head, err, older.Head)
+	}
+	retired := writeRelicChild(t, first, config, tip, nil, core.RelicOperation{ID: relicTestID(731002), Type: core.RelicOperationRetire})
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := writeRelicCheckpoint(t, first, config, retired, core.RelicBoundaryRetired)
+	if _, err := first.Sync(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	if got := syncGit(t, fixture.tasks, "rev-parse", relicRef(relicID)); got != checkpoint.Head {
+		t.Fatalf("tasks holds %s at %s, want the checkpoint %s", relicID, got, checkpoint.Head)
+	}
+	if got := syncGit(t, fixture.origin, "rev-parse", relicRef(relicID)); got != older.Head {
+		t.Fatalf("origin holds %s at %s, want the older copy %s", relicID, got, older.Head)
+	}
+	first, config = pullSettings(t, first, core.TasksRemoteSetting{})
+	return first, config, older, checkpoint
+}
+
+// commandIndex is the position of the first command for which match holds,
+// or -1.
+func commandIndex(commands [][]string, match func([]string) bool) int {
+	for index, command := range commands {
+		if match(command) {
+			return index
+		}
+	}
+	return -1
+}
+
+// A move back onto a place still holding an older copy of a relic compacted
+// since replaces that copy with the checkpoint by a push leased on exactly
+// the copy's tip, after writing the copy to the move's bundle under the relic
+// tracking name, unless the bundle is opted out of. Every operation the copy
+// held is held at the returned-to place afterwards.
+func TestMoveBackOntoOlderRelicCopyIsLeasedAndBundled(t *testing.T) {
+	t.Parallel()
+	for _, objectFormat := range []string{testrepo.FormatSHA1, testrepo.FormatSHA256} {
+		for _, noBackup := range []bool{false, true} {
+			name := objectFormat
+			if noBackup {
+				name += "/no-backup"
+			}
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				ctx := context.Background()
+				fixture := newMoveFixture(t, objectFormat)
+				first, config, older, checkpoint := movedRelicCompactedAway(t, fixture)
+				relicID := older.Record.State.RelicID
+				ref := relicRef(relicID)
+				before := relicOperationsHeld(t, fixture.origin, ref)
+
+				commands := observeCommands(first)
+				result, err := first.MoveTasks(ctx, config, MoveTasksOptions{RunID: "01MOVEBACKREL1C00000000000", NoBackup: noBackup})
+				first.commandObserver = nil
+				if err != nil {
+					t.Fatalf("MoveTasks() back = %v", err)
+				}
+				if !result.Verified || result.Relics != 1 || len(result.Replaced) != 0 {
+					t.Fatalf("MoveTasks() back = %+v, want the relic verified and no task replaced", result)
+				}
+				if got := syncGit(t, fixture.origin, "rev-parse", ref); got != checkpoint.Head {
+					t.Fatalf("origin holds %s at %s, want the checkpoint %s", relicID, got, checkpoint.Head)
+				}
+				requireHoldsEveryOperation(t, "origin after the move back", relicOperationsHeld(t, fixture.origin, ref), before)
+
+				lease := "--force-with-lease=" + ref + ":" + older.Head
+				pushAt := commandIndex(*commands, func(command []string) bool {
+					return len(command) > 0 && command[0] == "push" && slices.Contains(command, lease)
+				})
+				if pushAt < 0 {
+					t.Fatalf("no push leased on the older copy %s: %q", older.Head, relicPushes(*commands))
+				}
+				push := (*commands)[pushAt]
+				assertPlainRelicRefspecs(t, push)
+				if !slices.Contains(push, checkpoint.Head+":"+ref) {
+					t.Fatalf("leased push %q does not carry the checkpoint by a plain refspec", push)
+				}
+				for _, command := range relicPushes(*commands) {
+					for _, arg := range command {
+						if strings.HasPrefix(arg, "--force-with-lease="+ref+":") && arg != lease {
+							t.Fatalf("a push leased %s on another tip: %q", relicID, command)
+						}
+					}
+				}
+				bundleAt := commandIndex(*commands, func(command []string) bool {
+					return len(command) > 1 && command[0] == "bundle" && command[1] == "create"
+				})
+				if noBackup {
+					if bundleAt >= 0 || len(result.Bundles) != 0 {
+						t.Fatalf("--no-backup wrote a bundle: %q, %q", result.Bundles, (*commands)[bundleAt])
+					}
+					return
+				}
+				if bundleAt < 0 || bundleAt > pushAt || len(result.Bundles) != 1 {
+					t.Fatalf("bundle at command %d, leased push at %d, bundles %q; want one bundle written before the push",
+						bundleAt, pushAt, result.Bundles)
+				}
+				bundle := result.Bundles[0]
+				syncGit(t, first.Root, "bundle", "verify", "--quiet", bundle)
+				heads := syncGit(t, first.Root, "bundle", "list-heads", bundle)
+				if want := older.Head + " " + relicTrackingRefPrefixFor("origin") + relicID; !strings.Contains(heads, want) {
+					t.Fatalf("bundle heads = %q, want %q", heads, want)
+				}
+				if strings.Contains(heads, taskRefPrefix) || strings.Contains(heads, " "+relicRefPrefix) {
+					t.Fatalf("bundle heads = %q, want only the replaced relic copy and the manifest", heads)
+				}
+				restored := newBarePlace(t, objectFormat, "restored")
+				syncGit(t, restored, "fetch", "--quiet", bundle, "refs/workbook/*:refs/workbook/*")
+				requireHoldsEveryOperation(t, "the bundle", relicOperationsHeld(t, restored, relicTrackingRefPrefixFor("origin")+relicID), before)
+			})
+		}
+	}
+}
+
+// A move back onto a copy of a compacted relic that holds a late edit the
+// checkpoint does not list stops, naming the relic, and neither place's copy
+// of it moves. The synchronization with the returned-to place finds that
+// neither history accounts for the other (Decision 19's cannot combine) and
+// withholds the relic, which stops the move at its copy, before either place
+// is marked, as the same case stops it for a compacted task. Had it gone on,
+// the verification would name the relic too: the copy holds an operation the
+// checkpoint neither records nor lists (TestRelicChangesNotHeldCountsWhatACheckpointLists).
+func TestMoveBackOntoRelicCopyWithLateEditFailsSafely(t *testing.T) {
+	t.Parallel()
+	for _, objectFormat := range []string{testrepo.FormatSHA1, testrepo.FormatSHA256} {
+		t.Run(objectFormat, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			fixture := newMoveFixture(t, objectFormat)
+			first, config, older, checkpoint := movedRelicCompactedAway(t, fixture)
+			relicID := older.Record.State.RelicID
+			ref := relicRef(relicID)
+			// The marker refuses an edit at the place the tasks left, so the
+			// late edit is written past it, as only a bypass could.
+			late := writeRelicChild(t, fixture.second, fixture.stale, older, nil, relicTitleSet(731003, "Late edit at the place left"))
+			syncGit(t, fixture.second.Root, "push", "--quiet", "--no-verify", "origin", ref+":"+ref)
+			originBefore, tasksBefore := relicOperationsHeld(t, fixture.origin, ref), relicOperationsHeld(t, fixture.tasks, ref)
+
+			result, err := first.MoveTasks(ctx, config, MoveTasksOptions{RunID: "01MOVEBACKLATE000000000000"})
+			if err == nil || core.CategoryOf(err) != core.CategoryCorruptData || result.Verified || result.Marked != "" ||
+				!strings.Contains(err.Error(), "relic "+relicID+": cannot combine") {
+				t.Fatalf("MoveTasks() back = (%+v, %v), want it stopped before the mark, naming relic %s", result, err, relicID)
+			}
+			if got := syncGit(t, fixture.origin, "rev-parse", ref); got != late.Head {
+				t.Fatalf("origin holds %s at %s, want the late edit %s left", relicID, got, late.Head)
+			}
+			if got := syncGit(t, fixture.tasks, "rev-parse", ref); got != checkpoint.Head {
+				t.Fatalf("tasks holds %s at %s, want the checkpoint %s left", relicID, got, checkpoint.Head)
+			}
+			if got := relicOperationsHeld(t, fixture.origin, ref); !reflect.DeepEqual(got, originBefore) {
+				t.Fatalf("origin's operations of %s = %v, want %v", relicID, sorted(keysOf(got)), sorted(keysOf(originBefore)))
+			}
+			if got := relicOperationsHeld(t, fixture.tasks, ref); !reflect.DeepEqual(got, tasksBefore) {
+				t.Fatalf("tasks' operations of %s = %v, want %v", relicID, sorted(keysOf(got)), sorted(keysOf(tasksBefore)))
+			}
+			if !originBefore[relicTestID(731003)] || tasksBefore[relicTestID(731003)] {
+				t.Fatalf("the late edit is at origin %v and tasks %v, want origin only", originBefore, tasksBefore)
+			}
+		})
 	}
 }

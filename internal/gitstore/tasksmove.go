@@ -1697,9 +1697,19 @@ func (r *Repository) parkedRelicTips(ctx context.Context) (map[string][]string, 
 }
 
 // relicChangesNotHeld counts the commits of the relic's history at tip whose
-// operations are not all held by the histories at others: a commit others
-// reach is held, and any other is held when every operation ID it records is
-// recorded by a commit others reach that tip does not.
+// operations are not all held by the histories at others. A commit others
+// reach is held. Any other is held when every operation ID it records is
+// held by ID on the other side: recorded by a commit others reach that tip
+// does not, or listed as replaced by a checkpoint others reach, since a
+// checkpoint holds by ID every operation it lists.
+//
+// A checkpoint at tip's side is the one operation that records no one's
+// change: it stands for the operations it lists. It is held when its own ID
+// is held, or when every operation it lists is held, so a checkpoint that was
+// superseded without being listed (two compactions of the same history, or
+// one a fetch dropped) holds nothing the other side lacks. Every other
+// operation, a real change, is held only when the other side records it or
+// a checkpoint there lists it.
 func (r *Repository) relicChangesNotHeld(ctx context.Context, config core.ProjectConfig, relicID, tip string, others []string) (int, error) {
 	exclusive := func(include string, exclude []string) ([]string, error) {
 		input := include + "\n"
@@ -1731,6 +1741,31 @@ func (r *Repository) relicChangesNotHeld(ctx context.Context, config core.Projec
 				held[operation.ID] = struct{}{}
 			}
 		}
+		// A checkpoint can only be a root, so the roots are every checkpoint
+		// other reaches, the ones tip reaches too among them.
+		roots, err := r.Git(ctx, nil, "rev-list", "--max-parents=0", other)
+		if err != nil {
+			return 0, err
+		}
+		rootPacks, err := r.relicChainPacks(ctx, config, relicID, strings.Fields(string(roots)))
+		if err != nil {
+			return 0, err
+		}
+		for _, pack := range rootPacks {
+			if summary, ok := pack.Checkpoint(); ok {
+				for _, id := range summary.CompactedOperations {
+					held[id] = struct{}{}
+				}
+			}
+		}
+	}
+	allHeld := func(ids []string) bool {
+		for _, id := range ids {
+			if _, found := held[id]; !found {
+				return false
+			}
+		}
+		return true
 	}
 	packs, err := r.relicChainPacks(ctx, config, relicID, theirs)
 	if err != nil {
@@ -1738,11 +1773,18 @@ func (r *Repository) relicChangesNotHeld(ctx context.Context, config core.Projec
 	}
 	lacking := 0
 	for _, pack := range packs {
-		for _, operation := range pack.Operations {
-			if _, found := held[operation.ID]; !found {
+		if summary, ok := pack.Checkpoint(); ok {
+			if _, found := held[pack.Operations[0].ID]; !found && !allHeld(summary.CompactedOperations) {
 				lacking++
-				break
 			}
+			continue
+		}
+		ids := make([]string, 0, len(pack.Operations))
+		for _, operation := range pack.Operations {
+			ids = append(ids, operation.ID)
+		}
+		if !allHeld(ids) {
+			lacking++
 		}
 	}
 	return lacking, nil
