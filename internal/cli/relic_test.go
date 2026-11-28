@@ -969,7 +969,7 @@ func TestDocsDocumentRelicRetirementAndCompaction(t *testing.T) {
 		member(core.RelicHistory{}, "Compacted"), member(core.RelicDiff{}, "Compacted"),
 		"`compacted: true`", member(core.RelicHistoryCompaction{}, "RunID"),
 		member(core.RelicHistoryCompaction{}, "Boundary"), "was dropped when it was compacted on",
-		"has no change to part <part-id> since it was compacted on", "The kept body version cannot be diffed.",
+		"has no change to part <part-id> since it was compacted on", "The kept body version names the checkpoint.",
 		"`not-found` (exit `4`)")
 	require("the reference's relic section", relics,
 		member(core.RelicSummary{}, "Compacted"), "`parts[].dropped`", "`retired: true`",

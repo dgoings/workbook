@@ -457,6 +457,17 @@ func ResolveRelicVersion(chain RelicChain, relicID, prefix string) (RelicPoint, 
 			}
 		}
 	}
+	// The body a checkpoint kept is listed among a part's body versions under
+	// the ID of the save that made it, which the checkpoint dropped. That whole
+	// ID names the checkpoint, where the body stands, so an ID copied from the
+	// list answers. A prefix of it does not: a prefix names a change.
+	if chain.Kept != nil && len(chain.Commits) > 0 {
+		for _, part := range chain.Kept.Parts {
+			if part.Dropped == nil && part.Body != nil && strings.ToUpper(part.Body.Version) == wanted {
+				return RelicPoint{Index: 0, Commit: chain.Commits[0], Version: part.Body.Version}, nil
+			}
+		}
+	}
 	if err := refuseDroppedRelicVersion(chain, relicID, prefix); err != nil {
 		return RelicPoint{}, err
 	}
@@ -602,19 +613,32 @@ func (s RelicService) History(ctx context.Context, address string, options Relic
 	if err != nil {
 		return RelicHistory{}, err
 	}
-	if readable, _ := relicReadableCommits(chain); len(readable) > 0 {
-		if _, compacted := relicCheckpointRoot(readable); compacted {
-			read, err := s.HistoryReader.ReadRelicVersions(ctx, s.Config, chain.RelicID, []string{readable[0].Commit})
-			if err != nil {
-				return RelicHistory{}, err
-			}
-			if len(read) != 1 {
-				return RelicHistory{}, Errorf(CategoryCorruptData, "relic version read returned %d versions, want 1", len(read))
-			}
-			chain.Kept = &read[0].Snapshot.Record.State.Relic
-		}
+	if err := s.readKeptRelic(ctx, &chain); err != nil {
+		return RelicHistory{}, err
 	}
 	return BuildRelicHistory(chain, relicSummaryOf(snapshot), partID, options.Limit, options.All), nil
+}
+
+// readKeptRelic fills chain.Kept for a history that starts at a checkpoint:
+// the relic as the checkpoint stored it, read from Git by the checkpoint's
+// commit however the chain was read.
+func (s RelicService) readKeptRelic(ctx context.Context, chain *RelicChain) error {
+	readable, _ := relicReadableCommits(*chain)
+	if len(readable) == 0 {
+		return nil
+	}
+	if _, compacted := relicCheckpointRoot(readable); !compacted {
+		return nil
+	}
+	read, err := s.HistoryReader.ReadRelicVersions(ctx, s.Config, chain.RelicID, []string{readable[0].Commit})
+	if err != nil {
+		return err
+	}
+	if len(read) != 1 {
+		return Errorf(CategoryCorruptData, "relic version read returned %d versions, want 1", len(read))
+	}
+	chain.Kept = &read[0].Snapshot.Record.State.Relic
+	return nil
 }
 
 // Diff compares two points of a relic's history, or of one part's, in the
@@ -648,6 +672,11 @@ func (s RelicService) Diff(ctx context.Context, address string, versions []strin
 	case 0:
 		from, to, err = LatestRelicPoints(chain, partID)
 	default:
+		// A version may be the ID a kept body is listed under, which only
+		// the checkpoint's stored state knows.
+		if err = s.readKeptRelic(ctx, &chain); err != nil {
+			break
+		}
 		from, err = ResolveRelicVersion(chain, relicID, versions[0])
 		if err != nil {
 			break

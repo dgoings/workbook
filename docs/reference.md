@@ -1480,12 +1480,14 @@ Part 01M8G3PP69KRVFK5TAPVH1XKPT	section	changed
   the prefix matches one dropped change, and repeats what was typed when it
   matches several. A version no change ever had keeps the message under
   [Points and versions](#points-and-versions).
-- **The kept body version cannot be diffed.** A part's body versions start with
-  the body the checkpoint kept, listed under the ID of the save that made it,
-  with the checkpoint's `commit`, `actor` and `wallTime`, no `base`, and
-  `compacted: true` in JSON; text output does not mark it. That ID is still what
-  `relic update --base` takes, but the save was dropped, so `relic diff` refuses
-  it. To see what changed since, give the checkpoint's `version` instead.
+- **The kept body version names the checkpoint.** A part's body versions start
+  with the body the checkpoint kept, listed under the ID of the save that made
+  it, with the checkpoint's `commit`, `actor` and `wallTime`, no `base`, and
+  `compacted: true` in JSON; text output does not mark it. That ID is what
+  `relic update --base` takes. The save itself was dropped, so as a version for
+  `relic diff` the whole ID stands for the checkpoint, where that body is the
+  part's body: a diff from it shows what changed since. A prefix of it is
+  refused as any dropped change is.
 - A [stub](#stubs-parts-whose-content-was-dropped) has no body versions.
 
 #### Lines of a body
@@ -6431,7 +6433,9 @@ writes a bundle or compacts anything; see [A damaged relic](#a-damaged-relic).
 6. With synchronization on, it publishes the checkpoints.
 
 Relics are independent. A run stopped part way leaves some compacted and the
-bundle complete, and running it again compacts the rest.
+bundle complete, and running it again compacts the rest. The relics the stopped
+run compacted are listed as `already compacted` by the second run, which does
+not publish them: they stay unpublished until the next `workbook sync`.
 
 #### Output and JSON
 

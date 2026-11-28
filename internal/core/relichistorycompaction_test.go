@@ -319,6 +319,10 @@ func TestDiffOfDroppedVersionIsRefused(t *testing.T) {
 		t.Fatalf("history before compaction = %v", old)
 	}
 	for _, id := range old {
+		if id == second {
+			// The body the checkpoint kept answers under its own ID.
+			continue
+		}
 		message := dropped(id, point, at)
 		f.refuses(relicID, []string{id}, core.CategoryNotFound, message)
 		f.refuses(relicID, []string{strings.ToLower(id)}, core.CategoryNotFound, message)
@@ -344,8 +348,11 @@ func TestDiffOfDroppedVersionIsRefused(t *testing.T) {
 	again := f.compact(relicID, core.RelicBoundaryRetired)
 	latest := again.Operation.Operations[0].ID
 	day := again.Operation.WallTime.UTC().Format("2006-01-02")
-	for _, id := range []string{point, second} {
-		f.refuses(relicID, []string{id}, core.CategoryNotFound, dropped(id, latest, day))
+	f.refuses(relicID, []string{point}, core.CategoryNotFound, dropped(point, latest, day))
+	// The body it kept is still the part's body, so its ID now names the
+	// second checkpoint.
+	if diff := f.diff(relicID, second); diff.From == nil || diff.From.Commit != again.Head {
+		t.Fatalf("Diff(%s) from = %+v, want the second checkpoint %s", second, diff.From, again.Head)
 	}
 }
 
@@ -484,6 +491,33 @@ func TestKeptBodyVersionListedAsCompacted(t *testing.T) {
 	if whole := f.history(relicID, core.RelicHistoryOptions{}); whole.BodyVersions != nil {
 		t.Fatalf("a whole relic's history lists body versions: %+v", whole.BodyVersions)
 	}
+
+	// The kept version's ID, copied from that list, names the checkpoint, where
+	// its body stands: a diff from it shows what changed since, for the part
+	// and for the whole relic, in any letter case. A prefix of it does not: the
+	// save itself was dropped, and a prefix names a change, not a body.
+	point := pack.Operations[0].ID
+	for _, address := range []string{relicID + "#" + bodied, relicID} {
+		for _, version := range []string{second, strings.ToLower(second)} {
+			diff := f.diff(address, version)
+			want := f.diff(address, point)
+			if diff.From == nil || diff.From.Commit != checkpoint.Head || diff.From.Version != second {
+				t.Fatalf("Diff(%s, %s) from = %+v, want the checkpoint %s named %s", address, version, diff.From, checkpoint.Head, second)
+			}
+			diff.From.Version = want.From.Version
+			got, _ := json.Marshal(diff)
+			same, _ := json.Marshal(want)
+			if string(got) != string(same) {
+				t.Fatalf("Diff(%s, %s):\n got %s\nwant the diff from the checkpoint %s", address, version, got, same)
+			}
+		}
+	}
+	if diff := f.diff(relicID+"#"+bodied, second, third); len(diff.Parts) != 1 {
+		t.Fatalf("Diff(kept, third) parts = %+v, want the one part", diff.Parts)
+	}
+	f.refuses(relicID, []string{second[:len(second)-1]}, core.CategoryNotFound, fmt.Sprintf(
+		"change %s of relic %s was dropped when it was compacted on %s; history and diffs reach back only to change %s",
+		second, relicID, pack.WallTime.UTC().Format("2006-01-02"), point))
 }
 
 func assertBodyVersions(t *testing.T, got []core.RelicHistoryBodyVersion, want ...core.RelicHistoryBodyVersion) {

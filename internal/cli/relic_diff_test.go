@@ -456,13 +456,16 @@ func TestRelicDiffOfACompactedRelic(t *testing.T) {
 	if got, want := mustRun(t, repository, "relic", "diff", relicID), "Comparing:\t"+point+"\t→\t"+point+"\nThese two versions hold the same relic.\n"; got != want {
 		t.Fatalf("diff text = %q, want %q", got, want)
 	}
-	for _, version := range []string{versions[0], versions[1]} {
-		message := relicErrorMessage(t, repository, 4, core.CategoryNotFound, "diff", relicID+"#"+partID, version)
-		want := fmt.Sprintf("change %s of relic %s was dropped when it was compacted on %s; history and diffs reach back only to change %s",
-			version, relicID, dateOf(compacted.At), point)
-		if message != want {
-			t.Errorf("diff %s message = %q, want %q", version, message, want)
-		}
+	dropped := relicErrorMessage(t, repository, 4, core.CategoryNotFound, "diff", relicID+"#"+partID, versions[0])
+	if want := fmt.Sprintf("change %s of relic %s was dropped when it was compacted on %s; history and diffs reach back only to change %s",
+		versions[0], relicID, dateOf(compacted.At), point); dropped != want {
+		t.Errorf("diff %s message = %q, want %q", versions[0], dropped, want)
+	}
+	// The body the checkpoint kept is listed under the ID of its save, and
+	// that ID names the checkpoint: nothing has changed since.
+	kept := relicDiffOf(t, repository, relicID+"#"+partID, versions[1])
+	if kept.From == nil || kept.From.Version != versions[1] || kept.From.Commit != diff.From.Commit || kept.Parts != nil {
+		t.Errorf("diff from the kept body version = %+v, want the checkpoint and no change", kept)
 	}
 	message := relicErrorMessage(t, repository, 4, core.CategoryNotFound, "diff", relicID+"#"+note)
 	if want := fmt.Sprintf("relic %s has no change to part %s since it was compacted on %s", relicID, note, dateOf(compacted.At)); message != want {
