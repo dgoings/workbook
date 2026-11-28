@@ -205,7 +205,7 @@ func (f relicFixture) forgeNewerRelicCommit(t *testing.T, tip core.RelicSnapshot
 		`"operations":[{"id":"` + relicTestID(operationNumber) + `","type":"relic.archive"}]}` + "\n")
 	stateJSON := []byte(gitOutput(t, f.path, "cat-file", "blob", tip.Head+":state.json") + "\n")
 	for _, replacement := range [][2]string{
-		{`"minReader":6`, `"minReader":9`},
+		{fmt.Sprintf(`"minReader":%d`, state.MinReader), `"minReader":9`},
 		{fmt.Sprintf(`"logicalClock":%d`, state.LogicalClock), fmt.Sprintf(`"logicalClock":%d`, state.LogicalClock+1)},
 		{`"retired":false`, `"retired":true`},
 	} {

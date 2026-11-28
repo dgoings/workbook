@@ -759,6 +759,11 @@ func (p *schemaParser) link(schema *RelicSchema, resolve schemaResolve) error {
 		if err != nil {
 			return err
 		}
+		if other == nil && shipsBuiltInRelicSchema(otherType) {
+			return schemaFail(node.refPointer,
+				"the reference %q names type %s, which has no schema of this project's own; a reference cannot name a built-in schema",
+				ref, otherType)
+		}
 		if other == nil {
 			return schemaFail(node.refPointer, "the reference %q names type %s, which has no schema", ref, otherType)
 		}

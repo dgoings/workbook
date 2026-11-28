@@ -81,11 +81,13 @@ func newSchemaTestService(t *testing.T) (*memoryRelicStore, *memorySchemaStore, 
 }
 
 // putRelicNaming stores a relic of the type, naming the schema version, with
-// one section part per ID and no fields: each section lacks its heading.
+// one section part per ID and no fields: each section lacks its heading. A
+// relic naming a built-in declares the generation the name needs.
 func putRelicNaming(t *testing.T, store *memoryRelicStore, number int, relicType, schema string, partIDs ...string) RelicSnapshot {
 	t.Helper()
 	snapshot := relicSnapshotForTest(t, number, relicType, partIDs, false, false)
 	snapshot.Record.State.Relic.Schema = schema
+	snapshot.Record.State.MinReader = max(snapshot.Record.State.MinReader, relicSchemaMinReader(schema))
 	store.put(snapshot)
 	return snapshot
 }

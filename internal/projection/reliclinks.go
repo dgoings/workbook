@@ -193,7 +193,7 @@ func (s *Store) queryRelicLinksTo(ctx context.Context, target core.RelicLinkTarg
 			}
 		}
 		if schema != "" {
-			summary.Schema = &core.RelicSchemaRef{Type: summary.Type, ID: schema}
+			summary.Schema = &core.RelicSchemaRef{Type: summary.Type, ID: schema, BuiltIn: core.IsBuiltInRelicSchemaID(schema)}
 		}
 		if kind == relicLinkKindTask {
 			source.Link.To = core.RelicLinkTarget{Task: to}

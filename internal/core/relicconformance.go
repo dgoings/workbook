@@ -68,18 +68,43 @@ func JudgeRelic(
 	return RelicConformance{State: RelicConformanceConforms}, nil
 }
 
-// schemaListing reads the project's schema versions. With no schema store,
-// every type is open.
+// ReadRelicSchemaVersion reads one version a listing names: a built-in from
+// this build, which is never stored, and a project version from the store.
+// Every read of a version a relic is judged under goes through it, so nothing
+// asks the store for a built-in or caches one under its empty blob.
+func ReadRelicSchemaVersion(
+	ctx context.Context,
+	store RelicSchemaStore,
+	config ProjectConfig,
+	version RelicSchemaVersion,
+) (RelicSchemaDocument, *RelicSchema, error) {
+	if !version.IsBuiltIn() {
+		return store.ReadRelicSchema(ctx, config, version)
+	}
+	if _, document, schema, shipped := BuiltInRelicSchema(version.ID); shipped {
+		return document, schema, nil
+	}
+	return RelicSchemaDocument{}, nil, Errorf(CategoryNewerWriter,
+		"this Workbook does not have the built-in schema %s; upgrade Workbook and try again", version.ID)
+}
+
+// schemaListing reads the project's schema versions, with this build's
+// built-ins beside them. With no schema store, every type is open, built-in
+// types too.
 func (s RelicService) schemaListing(ctx context.Context) (RelicSchemaListing, error) {
 	if s.Schemas == nil {
 		return RelicSchemaListing{}, nil
 	}
-	return s.Schemas.RelicSchemaListing(ctx, s.Config)
+	listing, err := s.Schemas.RelicSchemaListing(ctx, s.Config)
+	if err != nil {
+		return RelicSchemaListing{}, err
+	}
+	return listing.WithBuiltIns(), nil
 }
 
 func (s RelicService) loadSchema(ctx context.Context) func(RelicSchemaVersion) (*RelicSchema, error) {
 	return func(version RelicSchemaVersion) (*RelicSchema, error) {
-		_, schema, err := s.Schemas.ReadRelicSchema(ctx, s.Config, version)
+		_, schema, err := ReadRelicSchemaVersion(ctx, s.Schemas, s.Config, version)
 		return schema, err
 	}
 }
@@ -102,7 +127,9 @@ func relicMutationUnder(snapshot RelicSnapshot, changed bool, listing RelicSchem
 
 // schemaForCreate is the version a new relic of the type is written under:
 // the one given, which must be a version of that type this clone has, or else
-// the type's newest. Both are zero for a type with no schema.
+// the type's newest, a project version or a built-in. Both are zero for a type
+// with no schema. A built-in name this build does not ship is a newer
+// Workbook's, which no sync brings.
 func (s RelicService) schemaForCreate(ctx context.Context, relicType, given string) (RelicSchemaListing, RelicSchemaVersion, *RelicSchema, error) {
 	listing, err := s.schemaListing(ctx)
 	if err != nil {
@@ -117,9 +144,17 @@ func (s RelicService) schemaForCreate(ctx context.Context, relicType, given stri
 		version = newest
 	} else {
 		named, known := listing.ByID(given)
+		if !known && IsBuiltInRelicSchemaID(given) {
+			return listing, RelicSchemaVersion{}, nil, Errorf(CategoryNewerWriter,
+				"the document names the built-in schema %s, which this Workbook does not have; upgrade Workbook and try again", given)
+		}
 		if !known {
 			return listing, RelicSchemaVersion{}, nil, Errorf(CategoryStaleWrite,
 				"the document names schema version %s, which this clone has not synced; run `workbook sync` and try again", given)
+		}
+		if named.Type != relicType && named.IsBuiltIn() {
+			return listing, RelicSchemaVersion{}, nil, Errorf(CategoryValidation,
+				"schema %s is a schema for %s, not for %s", given, named.Type, relicType)
 		}
 		if named.Type != relicType {
 			return listing, RelicSchemaVersion{}, nil, Errorf(CategoryValidation,
@@ -127,7 +162,7 @@ func (s RelicService) schemaForCreate(ctx context.Context, relicType, given stri
 		}
 		version = named
 	}
-	_, schema, err := s.Schemas.ReadRelicSchema(ctx, s.Config, version)
+	_, schema, err := ReadRelicSchemaVersion(ctx, s.Schemas, s.Config, version)
 	if err != nil {
 		return listing, RelicSchemaVersion{}, nil, err
 	}
@@ -154,19 +189,26 @@ func checkRelicCreateSchema(schema *RelicSchema, properties map[string]json.RawM
 
 // schemaForUpdate is the version an update of the relic is checked under:
 // the one it names. A relic naming a version this clone has not synced cannot
-// be checked, so it cannot be updated until the clone syncs.
+// be checked, so it cannot be updated until the clone syncs; one naming a
+// built-in this build does not ship cannot be updated until Workbook is
+// upgraded, which no sync helps.
 func (s RelicService) schemaForUpdate(ctx context.Context, relic RelicData, relicID string) (RelicSchemaListing, RelicSchemaVersion, *RelicSchema, error) {
 	listing, err := s.schemaListing(ctx)
 	if err != nil || relic.Schema == "" || s.Schemas == nil {
 		return listing, RelicSchemaVersion{}, nil, err
 	}
 	version, known := listing.ByID(relic.Schema)
+	if !known && IsBuiltInRelicSchemaID(relic.Schema) {
+		return listing, RelicSchemaVersion{}, nil, Errorf(CategoryNewerWriter,
+			"relic %s names the built-in schema %s, which this Workbook does not have; upgrade Workbook and try again",
+			relicID, relic.Schema)
+	}
 	if !known {
 		return listing, RelicSchemaVersion{}, nil, Errorf(CategoryStaleWrite,
 			"relic %s names a schema version for %s this clone has not synced; run `workbook sync` and try again",
 			relicID, relic.Type)
 	}
-	_, schema, err := s.Schemas.ReadRelicSchema(ctx, s.Config, version)
+	_, schema, err := ReadRelicSchemaVersion(ctx, s.Schemas, s.Config, version)
 	if err != nil {
 		return listing, RelicSchemaVersion{}, nil, err
 	}
@@ -287,9 +329,12 @@ func conformanceAgrees(stored RelicConformance, schema string, listing RelicSche
 }
 
 // RelicBehind reports whether a relic is behind its type's newest schema
-// version: the type has one, and the relic names an older version of it or
-// none. A relic of a type with no schema, or naming a version the listing
-// lacks, is not behind.
+// version, a project version or a built-in: the type has one, and the relic
+// names none or another known version of its type. Versions are compared by
+// ID, not number, since a built-in and a project version can share a number:
+// a relic on a built-in is behind once the project saves its own. A relic of
+// a type with no schema, or naming a version the listing lacks, is not
+// behind.
 func RelicBehind(relic RelicData, listing RelicSchemaListing) bool {
 	newest, has := listing.Newest(relic.Type)
 	if !has {
@@ -299,7 +344,7 @@ func RelicBehind(relic RelicData, listing RelicSchemaListing) bool {
 		return true
 	}
 	named, known := listing.ByID(relic.Schema)
-	return known && named.Type == relic.Type && named.Version < newest.Version
+	return known && named.Type == relic.Type && named.ID != newest.ID
 }
 
 // judgedAs is the conformance a save that has just checked the whole relic

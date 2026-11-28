@@ -107,12 +107,18 @@ func describeRelicSchemaVersion(version core.RelicSchemaVersion) string {
 // ReadRelicSchema reads and compiles one saved version, with every version it
 // pins. Blobs are read in batches, one per level of pinning, each bounded by
 // MaxRelicSchemaBytes. A version whose blob this clone lacks, or whose bytes
-// do not match what the settings list, is corrupt data naming the version.
+// do not match what the settings list, is corrupt data naming the version. A
+// built-in is never stored here; core.ReadRelicSchemaVersion hands it out, so
+// asking for one is refused.
 func (r *Repository) ReadRelicSchema(
 	ctx context.Context,
 	config core.ProjectConfig,
 	version core.RelicSchemaVersion,
 ) (core.RelicSchemaDocument, *core.RelicSchema, error) {
+	if version.IsBuiltIn() {
+		return core.RelicSchemaDocument{}, nil, core.Errorf(core.CategoryOperational,
+			"the built-in schema %s is not stored in the project settings", version.ID)
+	}
 	if err := r.validateRepositoryConfig(config); err != nil {
 		return core.RelicSchemaDocument{}, nil, err
 	}

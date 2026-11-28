@@ -303,3 +303,18 @@ func TestIdenticalSchemaPutWritesNothing(t *testing.T) {
 		t.Errorf("going back to version 1's document = %+v, changed %t; want a new version 3", back, changed)
 	}
 }
+
+// A built-in is never stored in the project settings, so asking the
+// repository for one is a caller's mistake, refused before any Git read.
+func TestReadRelicSchemaRefusesABuiltIn(t *testing.T) {
+	forBothSyncFormats(t, func(t *testing.T, repo, _ *Repository, config core.ProjectConfig) {
+		builtIn, _, _, _ := core.BuiltInRelicSchema("workbook:spec:1")
+		for _, version := range []core.RelicSchemaVersion{builtIn, {Type: "spec", Version: 9, ID: "workbook:spec:9"}} {
+			_, _, err := repo.ReadRelicSchema(context.Background(), config, version)
+			want := "the built-in schema " + version.ID + " is not stored in the project settings"
+			if core.CategoryOf(err) != core.CategoryOperational || err == nil || err.Error() != want {
+				t.Errorf("ReadRelicSchema(%s) = %v, want operational %q", version.ID, err, want)
+			}
+		}
+	})
+}

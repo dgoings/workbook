@@ -7,20 +7,25 @@ import (
 	"strings"
 )
 
-// relicMigrationTarget is what relic migrate --to asks for: a type, and either
-// a version number of it or, with number zero, its newest version.
+// relicMigrationTarget is what relic migrate --to asks for: a built-in by
+// name, or a type and either a version number of it or, with number zero, its
+// newest version.
 type relicMigrationTarget struct {
+	builtIn   string
 	relicType string
 	number    int
 }
 
 // parseRelicMigrationTarget reads --to: N, a version of the relic's own type;
-// <type>, that type's newest version; or <type>@N.
+// <type>, that type's newest version; <type>@N; or a built-in's name.
 func parseRelicMigrationTarget(target, relicType string) (relicMigrationTarget, error) {
 	invalid := func() error {
 		return Errorf(CategoryInvocation,
-			"--to %q is not a version: give N for version N of the relic's type, <type> for that type's newest version, or <type>@N",
+			"--to %q is not a version: give N for version N of the relic's type, <type> for that type's newest version, <type>@N, or a built-in schema's name",
 			target)
+	}
+	if IsBuiltInRelicSchemaID(target) {
+		return relicMigrationTarget{builtIn: target}, nil
 	}
 	// Digits alone are a version number, never a type's name.
 	if target != "" && strings.Trim(target, "0123456789") == "" {
@@ -59,9 +64,11 @@ func parseRelicVersionNumber(text string) (int, bool) {
 
 // Migrate moves a relic to another schema version, of its own type or of
 // another, recorded as one relic.migrate. Any version this clone lists may be
-// the target, an older one too, and a type with no schema makes the relic
-// open. The whole relic, its live parts only, must fit the version it moves
-// to. Migrating to what the relic already names writes nothing. The version
+// the target, an older one too, or a built-in this build ships, and a type
+// with no schema makes the relic open. A type's newest is its newest project
+// version, or its built-in when the project has none; N and <type>@N name
+// project versions only. The whole relic, its live parts only, must fit the
+// version it moves to. Migrating to what the relic already names writes nothing. The version
 // the relic names now is not read, so a relic naming one this clone has not
 // synced can still be moved.
 func (s RelicService) Migrate(ctx context.Context, idOrPrefix, target string) (RelicMutationResult, error) {
@@ -85,10 +92,18 @@ func (s RelicService) Migrate(ctx context.Context, idOrPrefix, target string) (R
 	}
 	var version RelicSchemaVersion
 	var found bool
-	if wanted.number == 0 {
+	switch {
+	case wanted.builtIn != "":
+		if version, found = listing.ByID(wanted.builtIn); !found || !version.IsBuiltIn() {
+			return RelicMutationResult{}, Errorf(CategoryNotFound, "this Workbook has no built-in schema %s", wanted.builtIn)
+		}
+		wanted.relicType = version.Type
+	case wanted.number == 0:
 		version, found = listing.Newest(wanted.relicType)
-	} else if version, found = listing.Number(wanted.relicType, wanted.number); !found {
-		return RelicMutationResult{}, Errorf(CategoryNotFound, "type %s has no schema version %d", wanted.relicType, wanted.number)
+	default:
+		if version, found = listing.Number(wanted.relicType, wanted.number); !found {
+			return RelicMutationResult{}, noProjectSchemaVersion(wanted, listing)
+		}
 	}
 	unchanged := relic.Type == wanted.relicType && relic.Schema == version.ID
 	if unchanged && !found {
@@ -96,7 +111,7 @@ func (s RelicService) Migrate(ctx context.Context, idOrPrefix, target string) (R
 	}
 
 	if found {
-		_, schema, err := s.Schemas.ReadRelicSchema(ctx, s.Config, version)
+		_, schema, err := ReadRelicSchemaVersion(ctx, s.Schemas, s.Config, version)
 		if err != nil {
 			return RelicMutationResult{}, err
 		}
@@ -138,6 +153,17 @@ func (s RelicService) Migrate(ctx context.Context, idOrPrefix, target string) (R
 		return RelicMutationResult{}, err
 	}
 	return relicMigrationResult(written, true, listing, judgedAs(found)), nil
+}
+
+// noProjectSchemaVersion refuses a numbered target the project has not saved,
+// naming the type's built-in when it has one: a number always names a
+// project version.
+func noProjectSchemaVersion(wanted relicMigrationTarget, listing RelicSchemaListing) error {
+	if newest, has := listing.Newest(wanted.relicType); has && newest.IsBuiltIn() {
+		return Errorf(CategoryNotFound, "type %s has no schema version %d of this project's own; its built-in schema is %s",
+			wanted.relicType, wanted.number, newest.ID)
+	}
+	return Errorf(CategoryNotFound, "type %s has no schema version %d", wanted.relicType, wanted.number)
 }
 
 // relicMigrationResult is a migration's result, which carries the

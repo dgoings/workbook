@@ -37,6 +37,18 @@ var builtInRelicSchemaRegistry = []struct {
 	{"plan", 1, "relicschemas/plan-1.json"},
 }
 
+// shipsBuiltInRelicSchema reports whether this build ships a built-in for the
+// type. It reads the registry, not the compiled built-ins, so compiling a
+// schema can ask it without compiling them.
+func shipsBuiltInRelicSchema(relicType string) bool {
+	for _, registered := range builtInRelicSchemaRegistry {
+		if registered.relicType == relicType {
+			return true
+		}
+	}
+	return false
+}
+
 var builtInRelicSchemaIDPattern = regexp.MustCompile(`^workbook:[a-z0-9]+(-[a-z0-9]+)*:[1-9][0-9]*$`)
 
 // IsBuiltInRelicSchemaID reports whether id is a well-formed built-in name,

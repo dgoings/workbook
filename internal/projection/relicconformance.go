@@ -24,7 +24,9 @@ import (
 // longer has is indexed again the same way, so the stored judgment always
 // equals the one Git gives.
 
-// relicSchemaCache holds compiled schema versions by blob ID.
+// relicSchemaCache holds compiled project schema versions by blob ID. A
+// built-in has no blob, and every built-in's is empty, so none is held here:
+// core.ReadRelicSchemaVersion hands each out from this build.
 type relicSchemaCache struct {
 	mu      sync.Mutex
 	schemas map[string]*core.RelicSchema
@@ -47,7 +49,8 @@ func (c *relicSchemaCache) put(blob string, schema *core.RelicSchema) {
 }
 
 // relicJudge judges the relics one pass indexes. It reads the schema listing
-// once, and only when a relic or row names a version.
+// once, and only when a relic or row names a version, with this build's
+// built-ins beside the project's versions, as the relic service reads it.
 type relicJudge struct {
 	store   *Store
 	judging bool
@@ -60,6 +63,7 @@ func (j *relicJudge) schemas(ctx context.Context) (core.RelicSchemaListing, erro
 		if err != nil {
 			return core.RelicSchemaListing{}, err
 		}
+		listing = listing.WithBuiltIns()
 		j.listing = &listing
 	}
 	return *j.listing, nil
@@ -106,10 +110,14 @@ func (j *relicJudge) judge(ctx context.Context, relic gitstore.IndexedRelic) (co
 		fields[part.ID] = document.Fields
 	}
 	return core.JudgeRelic(data, fields, listing, func(version core.RelicSchemaVersion) (*core.RelicSchema, error) {
+		if version.IsBuiltIn() {
+			_, schema, err := core.ReadRelicSchemaVersion(ctx, j.store.relics, j.store.config, version)
+			return schema, err
+		}
 		if schema, ok := j.store.relicSchemas.get(version.Blob); ok {
 			return schema, nil
 		}
-		_, schema, err := j.store.relics.ReadRelicSchema(ctx, j.store.config, version)
+		_, schema, err := core.ReadRelicSchemaVersion(ctx, j.store.relics, j.store.config, version)
 		if err != nil {
 			return nil, err
 		}
