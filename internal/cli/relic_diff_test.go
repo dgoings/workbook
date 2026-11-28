@@ -434,3 +434,48 @@ func TestRelicDiffTextShowsRelicLinkTargets(t *testing.T) {
 		}
 	}
 }
+
+func TestRelicDiffOfACompactedRelic(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	relicID, partID, versions := savedRelicPart(t, repository, "one\n", "two\n")
+	note := addRelicParts(t, repository, relicID, "note")[0]
+	mustRelic(t, repository, nil, "retire", relicID)
+	compactRetiredRelics(t, repository)
+	compacted := relicHistoryOf(t, repository, relicID).Compacted
+	if compacted == nil {
+		t.Fatal("the relic was not compacted")
+	}
+	point := compacted.Version
+
+	diff := relicDiffOf(t, repository, relicID)
+	if diff.From == nil || diff.From.Version != point || diff.To.Version != point || diff.Compacted == nil ||
+		*diff.Compacted != *compacted || diff.Parts != nil || diff.Changes != nil {
+		t.Fatalf("diff right after compaction = %+v", diff)
+	}
+	if got, want := mustRun(t, repository, "relic", "diff", relicID), "Comparing:\t"+point+"\t→\t"+point+"\nThese two versions hold the same relic.\n"; got != want {
+		t.Fatalf("diff text = %q, want %q", got, want)
+	}
+	for _, version := range []string{versions[0], versions[1]} {
+		message := relicErrorMessage(t, repository, 4, core.CategoryNotFound, "diff", relicID+"#"+partID, version)
+		want := fmt.Sprintf("change %s of relic %s was dropped when it was compacted on %s; history and diffs reach back only to change %s",
+			version, relicID, dateOf(compacted.At), point)
+		if message != want {
+			t.Errorf("diff %s message = %q, want %q", version, message, want)
+		}
+	}
+	message := relicErrorMessage(t, repository, 4, core.CategoryNotFound, "diff", relicID+"#"+note)
+	if want := fmt.Sprintf("relic %s has no change to part %s since it was compacted on %s", relicID, note, dateOf(compacted.At)); message != want {
+		t.Errorf("part diff message = %q, want %q", message, want)
+	}
+
+	mustRelic(t, repository, nil, "unretire", relicID)
+	diff = relicDiffOf(t, repository, relicID)
+	if diff.From == nil || diff.From.Version != point || len(diff.Changes) != 1 || diff.Changes[0].Name != "retired" ||
+		string(diff.Changes[0].From) != "true" || string(diff.Changes[0].To) != "false" {
+		t.Fatalf("diff after unretire = %+v", diff)
+	}
+	if text := mustRun(t, repository, "relic", "diff", relicID); !strings.Contains(text, "Retired:\ttrue → false\n") {
+		t.Fatalf("diff text = %q", text)
+	}
+}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"reflect"
 	"slices"
@@ -354,4 +355,152 @@ func TestRelicHistoryIsTheSameAfterTheIndexIsDeleted(t *testing.T) {
 			assertSameOutputs(t, "after the cache was deleted", outputs(), want)
 		})
 	}
+}
+
+// compactRetiredRelics compacts every retired and deleted relic of a
+// repository with no remote, through workbook compact.
+func compactRetiredRelics(t *testing.T, repository string) {
+	t.Helper()
+	compactRun(t, repository, "compact", "--relics", "--no-sync")
+}
+
+func TestRelicHistoryTextAndJSONAfterCompaction(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	relicID, partID, versions := savedRelicPart(t, repository, "one\n", "two\n")
+	mustRelic(t, repository, nil, "retire", relicID)
+	before := relicHistoryOf(t, repository, relicID, "--all")
+	compactRetiredRelics(t, repository)
+
+	history := relicHistoryOf(t, repository, relicID)
+	compacted := history.Compacted
+	if history.Total != 0 || history.Showing != 0 || compacted == nil {
+		t.Fatalf("history = total %d, showing %d, compacted %+v", history.Total, history.Showing, compacted)
+	}
+	if compacted.Boundary != core.RelicBoundaryRetired || compacted.Changes != before.Total ||
+		!compacted.From.Equal(before.Changes[0].WallTime) || !compacted.To.Equal(before.Changes[before.Total-1].WallTime) ||
+		compacted.Version == "" || compacted.RunID == "" || compacted.At.IsZero() {
+		t.Fatalf("compacted = %+v, want the %d changes before it", compacted, before.Total)
+	}
+	line := fmt.Sprintf("Compacted on %s: %d earlier changes (%s to %s) were dropped; history starts at change %s.\n",
+		dateOf(compacted.At), compacted.Changes, dateOf(compacted.From), dateOf(compacted.To), compacted.Version)
+	text := mustRun(t, repository, "relic", "show", relicID, "--history")
+	if want := relicID + "\tspec\tEdited\nShowing all 0 change(s).\n" + line; text != want {
+		t.Fatalf("history text = %q, want %q", text, want)
+	}
+	part := relicHistoryOf(t, repository, relicID+"#"+partID)
+	if len(part.BodyVersions) != 1 || part.BodyVersions[0].Version != versions[1] || !part.BodyVersions[0].Compacted ||
+		!part.BodyVersions[0].Current || part.BodyVersions[0].Commit != relicHeadOf(t, repository, relicID) {
+		t.Fatalf("bodyVersions = %+v, want the kept body", part.BodyVersions)
+	}
+
+	mustRelic(t, repository, nil, "unretire", relicID)
+	history = relicHistoryOf(t, repository, relicID)
+	if history.Total != 1 || history.Showing != 1 || history.Changes[0].Summary != "unretired" || history.Compacted == nil {
+		t.Fatalf("history after an edit = %+v", history)
+	}
+	// The compaction line ends the text, after the changes and body versions.
+	text = mustRun(t, repository, "relic", "show", relicID+"#"+partID, "--history")
+	if !strings.Contains(text, "Body versions:\n") || !strings.HasSuffix(text, "\n"+line) {
+		t.Fatalf("part history text = %q, want it to end %q", text, line)
+	}
+}
+
+// A history and a diff of a compacted relic are the same bytes whether the
+// index or Git answers: after a compaction, after an edit that follows one, and
+// after a second compaction.
+func TestHistoryFromIndexEqualsGitAfterCompaction(t *testing.T) {
+	t.Parallel()
+	forBothRelicFormats(t, func(t *testing.T, objectFormat string) {
+		repository := relicRepositoryFor(t, objectFormat)
+		type edited struct {
+			relic, part string
+			versions    []string
+		}
+		newRetired := func() edited {
+			relicID, partID, versions := savedRelicPart(t, repository, "one\n", "two\n")
+			addRelicParts(t, repository, relicID, "note")
+			mustRelic(t, repository, nil, "retire", relicID)
+			return edited{relicID, partID, versions}
+		}
+		save := func(relic *edited, text string) {
+			saved := mustUpdateRelic(t, repository, relic.relic, "--part", relic.part,
+				"--body-file", writeRelicBodyFile(t, "body.md", text), "--base", relic.versions[len(relic.versions)-1])
+			relic.versions = append(relic.versions, saved.Parts[0].Body.Version)
+		}
+		compacted, after, twice := newRetired(), newRetired(), newRetired()
+		gone := newRetired()
+		mustRelic(t, repository, nil, "delete", gone.relic)
+		// Fill the index with the whole histories before they are compacted,
+		// so a row kept from then would show.
+		for _, relic := range []edited{compacted, after, twice, gone} {
+			relicHistoryOf(t, repository, relic.relic, "--all")
+		}
+		compactRetiredRelics(t, repository)
+		// Only twice changes between the runs, so only it is compacted again;
+		// after is edited once the last run is over.
+		save(&twice, "three\n")
+		compactRetiredRelics(t, repository)
+		save(&twice, "four\n")
+		save(&after, "three\n")
+		mustRelic(t, repository, nil, "update", after.relic, "--title", "Revised <&>")
+
+		var commands [][]string
+		for _, relic := range []edited{compacted, after, twice, gone} {
+			part := relic.relic + "#" + relic.part
+			commands = append(commands,
+				[]string{"relic", "show", relic.relic, "--history", "--all", "--json"},
+				[]string{"relic", "show", relic.relic, "--history"},
+				[]string{"relic", "show", part, "--history", "--all", "--json"},
+				[]string{"relic", "show", part, "--history"},
+				[]string{"relic", "diff", relic.relic, "--json"},
+				[]string{"relic", "diff", relic.relic},
+			)
+		}
+		commands = append(commands,
+			[]string{"relic", "diff", after.relic + "#" + after.part, "--json"},
+			[]string{"relic", "diff", twice.relic + "#" + twice.part, twice.versions[len(twice.versions)-1], "--json"},
+		)
+		outputs := fromIndexAndGit(t, repository, commands...)
+		if !strings.Contains(outputs[0], `"compacted":{"version":"`) {
+			t.Fatalf("history of the compacted relic = %s", outputs[0])
+		}
+		// The relics are in the states the comparison is meant to cover.
+		for _, test := range []struct {
+			relic          edited
+			total, changes int
+		}{{compacted, 0, 5}, {after, 2, 5}, {twice, 1, 6}} {
+			history := relicHistoryOf(t, repository, test.relic.relic, "--all")
+			if history.Total != test.total || history.Compacted == nil || history.Compacted.Changes != test.changes {
+				t.Fatalf("history = total %d, compacted %+v; want %d above a checkpoint of %d changes",
+					history.Total, history.Compacted, test.total, test.changes)
+			}
+		}
+		// The versions the compactions dropped are refused the same way by
+		// both, the checkpoint of an earlier run among them.
+		refusals := func() []string {
+			var got []string
+			for _, relic := range []edited{compacted, after, twice} {
+				got = append(got, relicErrorMessage(t, repository, 4, core.CategoryNotFound, "diff", relic.relic, relic.versions[0]))
+			}
+			return got
+		}
+		want := refusals()
+		if err := os.Remove(relicCachePath(t, repository)); err != nil {
+			t.Fatal(err)
+		}
+		assertSameOutputs(t, "refusals after the cache was deleted", refusals(), want)
+		if err := os.Remove(relicCachePath(t, repository)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(relicCachePath(t, repository), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for index, relic := range []edited{compacted, after, twice} {
+			code, _, stderr := run(t, repository, "relic", "diff", relic.relic, relic.versions[0])
+			if code != 4 || !strings.Contains(stderr, want[index]) {
+				t.Fatalf("diff from Git = (%d, %q), want exit 4 and %q", code, stderr, want[index])
+			}
+		}
+	})
 }

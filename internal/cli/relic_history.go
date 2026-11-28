@@ -125,8 +125,9 @@ func parseRelicDiffContext(value string) (int, error) {
 }
 
 // writeRelicHistory prints a history: the relic, the window shown, each change
-// with its operations, and for a part its body versions. Every stored string
-// passes through singleLine.
+// with its operations, for a part its body versions, and last, for a compacted
+// relic, what the compaction dropped. Every stored string passes through
+// singleLine.
 func writeRelicHistory(stdout io.Writer, history core.RelicHistory) {
 	relic := history.Relic
 	fmt.Fprintf(stdout, "%s\t%s\t%s\n", relic.ID, singleLine(relic.Type), singleLine(relic.Title))
@@ -165,6 +166,11 @@ func writeRelicHistory(stdout io.Writer, history core.RelicHistory) {
 		shown := *truncated
 		shown.Commit, shown.Message = singleLine(shown.Commit), singleLine(shown.Message)
 		writeHistoryTruncation(stdout, &shown)
+	}
+	if compacted := history.Compacted; compacted != nil {
+		fmt.Fprintf(stdout, "Compacted on %s: %d earlier changes (%s to %s) were dropped; history starts at change %s.\n",
+			relicDay(compacted.At), compacted.Changes, relicDay(compacted.From), relicDay(compacted.To),
+			singleLine(compacted.Version))
 	}
 }
 

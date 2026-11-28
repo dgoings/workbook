@@ -85,14 +85,16 @@ type RelicDiffPoint struct {
 // members (title, schema, retired, deleted); it, Properties and Links are left
 // out of a part's diff.
 type RelicDiff struct {
-	Relic      string             `json:"relic"`
-	Part       string             `json:"part,omitempty"`
-	From       *RelicDiffPoint    `json:"from"`
-	To         RelicDiffPoint     `json:"to"`
-	Changes    []RelicValueChange `json:"changes,omitempty"`
-	Properties []RelicValueChange `json:"properties,omitempty"`
-	Parts      []RelicPartDiff    `json:"parts,omitempty"`
-	Links      *RelicLinksDiff    `json:"links,omitempty"`
+	Relic string          `json:"relic"`
+	Part  string          `json:"part,omitempty"`
+	From  *RelicDiffPoint `json:"from"`
+	To    RelicDiffPoint  `json:"to"`
+	// Compacted is set when the relic's history starts at a checkpoint.
+	Compacted  *RelicHistoryCompaction `json:"compacted,omitempty"`
+	Changes    []RelicValueChange      `json:"changes,omitempty"`
+	Properties []RelicValueChange      `json:"properties,omitempty"`
+	Parts      []RelicPartDiff         `json:"parts,omitempty"`
+	Links      *RelicLinksDiff         `json:"links,omitempty"`
 
 	// unread records a changed body the comparison was not given; see Err.
 	unread error
