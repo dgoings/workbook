@@ -641,6 +641,12 @@ func newOperationAccount(ids []string, chain []OperationCommit) operationAccount
 // checkpoint is also covered when everything it compacted is, whatever its own
 // ID: that is a checkpoint of history the account already holds, as when two
 // clones compacted the same tip, and it was never a change of its own.
+//
+// A commit whose only operations the account lacks are description merges
+// derived from an edit it holds is covered too (derivedFromHeld). A checkpoint
+// lists the edit and not a merge another place made of it when the tasks
+// moved, so without this the pack [S, M] that place holds would count as a
+// change of its own and S would be replayed again over later text.
 func (accounted operationAccount) covers(commit OperationCommit) bool {
 	for _, operation := range commit.Operation.Operations {
 		if _, found := accounted[operation.ID]; found {
@@ -649,7 +655,7 @@ func (accounted operationAccount) covers(commit OperationCommit) bool {
 		if checkpoint, ok := commit.Operation.Checkpoint(); ok && accounted.coversAll(checkpoint.CompactedOperations) {
 			continue
 		}
-		return false
+		return derivedFromHeld(commit.Operation, accounted.has)
 	}
 	return true
 }

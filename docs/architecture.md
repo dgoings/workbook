@@ -2638,7 +2638,12 @@ replayed onto is skipped whatever its commit, and only a missing one is
 written, once. A `description.merge` is derived from the edit it names as
 `other`, so it counts as held wherever that edit is held, and a pack whose
 only unrecorded operations are such merges is skipped like a recorded one: the
-replay at that place merges the edit itself, under another ID. Any other
+replay at that place merges the edit itself, under another ID. The rule
+applies wherever Workbook asks whether an operation is accounted for, a
+checkpoint's list of compacted operations included: a checkpoint lists the
+edit and not the merge another place recorded with it, so without the rule
+that place's copy would count as a change of its own and its stale edit would
+be replayed onto the checkpoint over later text. Any other
 partly recorded pack is refused, since writing it would record an ID twice.
 Identity is checked by content as well as ID: a pack that
 reuses a recorded ID for a different change is refused as corrupt, naming both
@@ -2654,8 +2659,10 @@ replay skips every commit whose operations the other side already holds, so
 alternating between two places never writes a relic operation twice. A
 `part.body.merge` is derived from the save it names as `other`, so it counts
 as held wherever that save is held, and a commit whose only operations the
-other side lacks are such merges is skipped like a held one; any other partly
-held commit is refused. The two
+other side lacks are such merges is skipped like a held one, a relic
+checkpoint's list counting as held; any other partly held commit is refused.
+`move-tasks` reports each merge it made of either kind, `description-merged`
+or `relic-body-merged`, once. The two
 synchronizations with the new place then publish them. Verification lists
 both places' relic refs and requires the new place to hold every operation of
 every relic of this project's the old place holds, at the same commit, under

@@ -224,9 +224,9 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 		for _, bundle := range result.Bundles {
 			fmt.Fprintf(stderr, "Backup:\t%s\n", bundle)
 		}
-		// So is a description it merged before it stopped: running the command
-		// again does not make that merge again.
-		writeRelicWarnings(stderr, result.TaskWarnings)
+		// So is a description or relic body it merged before it stopped:
+		// running the command again does not make that merge again.
+		writeRelicWarnings(stderr, moveWarnings(result))
 		return err
 	}
 	summary := moveTasksSummary{MoveTasksResult: result}
@@ -266,10 +266,10 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 		}
 	}
 	if *jsonMode {
-		writeResultWithWarnings(stdout, "move-tasks", summary, result.TaskWarnings)
+		writeResultWithWarnings(stdout, "move-tasks", summary, moveWarnings(result))
 		return err
 	}
-	writeRelicWarnings(stderr, result.TaskWarnings)
+	writeRelicWarnings(stderr, moveWarnings(result))
 	fmt.Fprintf(stdout, "Moved:\t%s (%s)\t->\t%s (%s)\n", result.From.Remote, result.From.URL, result.To.Remote, result.To.URL)
 	fmt.Fprintf(stdout, "Tasks:\t%d\t(%d at the same commit, %d holding every operation under other commits)\n",
 		result.Tasks, result.Identical, result.Carried)
@@ -327,6 +327,12 @@ func runMoveTasks(ctx context.Context, args []string, cwd string, stdout, stderr
 	}
 	fmt.Fprintf(stdout, "Next:\tcommit .workbook/config.json and push it, if that is not done yet; everyone else pulls it and runs workbook setup\n")
 	return err
+}
+
+// moveWarnings is what a move-tasks run warns of: its description merges and
+// then its relic warnings, the order a sync reports them in.
+func moveWarnings(result gitstore.MoveTasksResult) []core.Warning {
+	return withRelicWarnings(result.TaskWarnings, result.RelicWarnings)
 }
 
 // moveTasksSummary is move-tasks' JSON result: the move, and what

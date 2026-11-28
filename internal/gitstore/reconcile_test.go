@@ -426,3 +426,45 @@ func setSyncTaskStatus(t *testing.T, repo *Repository, config core.ProjectConfig
 		t.Fatal(err)
 	}
 }
+
+// A previous head that a later local commit built on, and that later commit
+// parked by a reconciliation, is accepted as the parked tip is: the ref moved
+// on from it with nothing recording the step, as when move-tasks carries a
+// straggler and then moves the tasks back. Without the parked tip it is still
+// refused.
+func TestValidateTaskHeadAdvancesAcceptsAnAncestorOfAParkedTip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	first, second, config := syncRepositories(t)
+	task := createSyncTask(t, first, config, "Advancing task")
+	publishTaskRefs(t, first)
+	if _, err := second.Fetch(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+
+	updateSyncTask(t, first, config, task.ID, "Remote branch")
+	setSyncTaskPriority(t, second, config, task.ID, core.PriorityHigh)
+	previous, err := second.Get(ctx, config, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setSyncTaskPriority(t, second, config, task.ID, core.PriorityLow)
+	publishTaskRefs(t, first)
+	if _, err := second.Fetch(ctx, config); err != nil {
+		t.Fatal(err)
+	}
+	parked := reconciledRefPrefix + task.ID + "/0"
+	if got := refValue(t, second, parked); got == previous.Head {
+		t.Fatalf("the parked tip is the previous head %s, want a commit built on it", got)
+	}
+	current := TaskHead{TaskID: task.ID, ObjectID: refValue(t, second, taskRefPrefix+task.ID)}
+
+	if err := second.ValidateTaskHeadAdvances(ctx, config, []HeadAdvance{{Previous: previous, Current: current}}); err != nil {
+		t.Fatalf("ValidateTaskHeadAdvances(ancestor of a parked tip) error = %v, want nil", err)
+	}
+	syncGit(t, second.Root, "update-ref", "-d", parked)
+	err = second.ValidateTaskHeadAdvances(ctx, config, []HeadAdvance{{Previous: previous, Current: current}})
+	if core.CategoryOf(err) != core.CategoryCorruptData {
+		t.Fatalf("ValidateTaskHeadAdvances(nothing parked) error = %v, want corrupt data", err)
+	}
+}

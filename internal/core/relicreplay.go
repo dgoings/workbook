@@ -420,9 +420,12 @@ func relicPackHeld(pack RelicOperationPack, held map[string]RelicOperation) (boo
 // old place's and appends a merge, [save L, merge M], while the new place
 // holds [save L] alone. Any operation that is not held and is not such a merge
 // makes this false, so a pack only part of whose own changes are held is
-// still refused. Replay (rule 2 of PlanRelicReplay) and the move's
-// verification (relicChangesNotHeld), which the clean-up after a move relies
-// on, apply it; nothing else does.
+// still refused. Replay (rule 2 of PlanRelicReplay), the move's verification
+// (relicChangesNotHeld), which the clean-up after a move relies on, and the
+// settling of a compacted relic (gitstore's localAccountsForRemote, which
+// decides the leased push, and the adoption of origin's checkpoint) apply it.
+// A checkpoint lists the save and not a merge another place made of it, so
+// the rule is needed there as much as on an uncompacted history.
 func RelicPackHeldBy(pack RelicOperationPack, isHeld func(string) bool) bool {
 	byID := make(map[string]RelicOperation, len(pack.Operations))
 	for _, operation := range pack.Operations {

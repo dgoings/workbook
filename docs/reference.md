@@ -4550,7 +4550,8 @@ were shared. A relic that could not be replayed is also listed in the
 envelope's `relicConflict`, as under [A relic conflict](#a-relic-conflict),
 and a relic over a limit after a merge gives a `relic-over-limit` warning in
 `warnings`. A [merged body](#merged-bodies) gives a `relic-body-merged` warning
-for each part merged, from those three commands and from `relic update`. A
+for each part merged, from those three commands, from `relic update` and from
+[`move-tasks`](#choosing-the-remote-and-moving-the-tasks). A
 `relic update` that cannot merge its save lists the conflict in `relicConflict`
 too, with `data` `null`. A restore of a relic whose content a compaction dropped gives the
 warning `relic-content-dropped`, and a synchronization that dropped an
@@ -6089,7 +6090,11 @@ warning that names the old place.
 That merge counts as held, by the replay and by the check in step 7, wherever
 the edit it merged is held, because the replay there merges that edit itself:
 moving the tasks back to a place holding the edit alone merges it the other
-way and completes.
+way and completes. The same holds where the edit is held only because a
+checkpoint lists it: a task compacted at one place lists the edit but not the
+merge the other place recorded with it, and moving the tasks to that other
+place counts its copy as held, so the copy is replaced by the checkpoint and
+the edit is not applied again over later text.
 One that conflicts with the new place's history is set aside instead: the old
 place's history for that task is parked in this checkout under
 `refs/workbook/reconciled/<task>/<n>`, and the run finishes and exits 8. Its
@@ -6111,7 +6116,13 @@ itself, and the two synchronizations with the new place publish them there.
 A relic body save [merged](#merged-bodies) onto one the old place
 received while the tasks moved counts as held, by the replay and by the check
 in step 7, wherever the save it merged is held, so the run that carries the
-old place's save to the new place completes.
+old place's save to the new place completes. That includes a save held only
+because a relic checkpoint lists it, so moving the tasks onto a place still
+holding an older copy with such a merge replaces that copy with the
+checkpoint. The run reports such a merge with a `relic-body-merged` warning,
+as it reports a merged description with `description-merged`, once each, in
+its JSON envelope's `warnings` or on standard error: a merge made reading the
+old place only when it still stands once the tasks are copied.
 A relic change that cannot be replayed is a
 [relic conflict](#a-relic-conflict): its local tip is parked under
 `refs/workbook/reconciled-relics/<relic>/<n>`, the run finishes and is

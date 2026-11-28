@@ -128,10 +128,14 @@ func (held heldOperations) has(id string) bool {
 // a merge, [field.set S, description.merge M] at the new place and [field.set
 // S] at the old one, and the tasks then move back. Any operation that is not
 // held and is not such a merge makes this false, so a pack only part of whose
-// own edits are held is still refused. Replay (taskReplay.next) and the
-// move's guards apply it, in the carry (carryTask) and the verification
-// (verifyMovedTasks), which the clean-up after a move relies on; nothing else
-// does.
+// own edits are held is still refused. Replay (taskReplay.next) applies it,
+// and so does every test of whether a commit is accounted for
+// (operationAccount.covers): what is left to replay or carry across a
+// checkpoint (operationsNotIn, for fetch, adoption, the stuck-task report and
+// the carry), the compaction guards and lease (chainAccountsFor), and the
+// move's verification (verifyMovedTasks), which the clean-up after a move
+// relies on. A checkpoint lists the edit and not such a merge made at another
+// place, so the rule is needed there as much as on an uncompacted history.
 func derivedFromHeld(pack core.OperationPack, isHeld func(string) bool) bool {
 	byID := make(map[string]core.Operation, len(pack.Operations))
 	for _, operation := range pack.Operations {

@@ -70,6 +70,17 @@ type relicStage struct {
 	Invalid   []string
 	Newer     []string
 	Err       error
+	// warnedAt is each relic whose ref the stage moved with a warning, and
+	// where it moved it, so a caller that moves the ref again in the same run
+	// can tell whether what the warning reports still stands.
+	warnedAt []relicWarnedAt
+}
+
+// relicWarnedAt is the warnings one relic's replay reported, and the commit
+// the stage moved its ref to.
+type relicWarnedAt struct {
+	relicID, next string
+	warnings      []core.Warning
 }
 
 // corruptError, newerWriterError, conflictError and otherError are the
@@ -283,6 +294,7 @@ func (r *Repository) syncFetchedRelics(ctx context.Context, config core.ProjectC
 		r.reconcileCompactedRelics(ctx, config, compacted, graph)...)
 	var conflicts []core.RelicConflict
 	var warnings []core.Warning
+	warnedBy := map[string][]core.Warning{}
 	adopted := map[string]bool{}
 	for index, outcome := range outcomes {
 		relicID := outcome.RelicID
@@ -304,6 +316,9 @@ func (r *Repository) syncFetchedRelics(ctx context.Context, config core.ProjectC
 		}
 		update := relicRefUpdate{RelicID: relicID, Next: outcome.Next, Expected: requests[index].Local}
 		warnings = append(warnings, outcome.Warnings...)
+		if len(outcome.Warnings) > 0 {
+			warnedBy[relicID] = outcome.Warnings
+		}
 		if outcome.Conflict != nil {
 			conflict := *outcome.Conflict
 			conflict.Remote = r.remote()
@@ -348,6 +363,9 @@ func (r *Repository) syncFetchedRelics(ctx context.Context, config core.ProjectC
 	for _, update := range updates {
 		state.Local[update.RelicID] = update.Next
 		stage.Results = append(stage.Results, planned[update.RelicID])
+		if warned := warnedBy[update.RelicID]; len(warned) > 0 {
+			stage.warnedAt = append(stage.warnedAt, relicWarnedAt{relicID: update.RelicID, next: update.Next, warnings: warned})
+		}
 		// The transaction logged the move, naming the old tip, and that entry
 		// would keep the history origin's checkpoint replaced alive. A failure
 		// to expire it is left alone: the ref is right, and only reclaiming

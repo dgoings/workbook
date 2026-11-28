@@ -79,6 +79,16 @@ type MoveTasksResult struct {
 	// Recopy, and one for each merge made while carrying the old place's
 	// operations. Callers lift it to the result envelope, as for SyncResult.
 	TaskWarnings []core.Warning `json:"-"`
+	// RelicWarnings is every relic warning of the run, once each: those its
+	// synchronizations with the new place reported, and those of its relic
+	// stage reading the old place (moveReadSource) that still stand once the
+	// tasks are copied, a relic-body-merged among them when it merged this
+	// checkout's save onto the old place's. Callers lift it to the result
+	// envelope beside TaskWarnings.
+	RelicWarnings []core.Warning `json:"-"`
+	// readWarnings is what the relic stage reading the old place warned of,
+	// kept until the run knows whether each still stands (standingReadWarnings).
+	readWarnings []relicWarnedAt
 }
 
 // MoveStragglers is what one run carried by operation identity.
@@ -286,7 +296,7 @@ func (r *Repository) moveTasks(ctx context.Context, config core.ProjectConfig, o
 	if err := r.moveStep("read"); err != nil {
 		return result, err
 	}
-	relicConflicts, err := r.moveReadSource(ctx, config, from)
+	relicConflicts, err := r.moveReadSource(ctx, config, from, &result)
 	if err != nil {
 		return result, err
 	}
@@ -315,7 +325,7 @@ func (r *Repository) moveTasks(ctx context.Context, config core.ProjectConfig, o
 	if err := r.moveStep("reread"); err != nil {
 		return result, err
 	}
-	reread, err := r.moveReadSource(ctx, config, from)
+	reread, err := r.moveReadSource(ctx, config, from, &result)
 	if err != nil {
 		return result, err
 	}
@@ -326,6 +336,10 @@ func (r *Repository) moveTasks(ctx context.Context, config core.ProjectConfig, o
 	}
 	result.Recopy, err = r.moveCopy(ctx, config, from, to.Name, carried, &result)
 	if err != nil {
+		return result, err
+	}
+
+	if err := r.standingReadWarnings(ctx, &result); err != nil {
 		return result, err
 	}
 
@@ -599,8 +613,11 @@ func (r *Repository) forgetAddedRemote(ctx context.Context, setup *TasksRemoteSe
 // place's tip. Folding is safe to repeat for relics, as it is not for tasks,
 // because a relic replay skips every pack whose operations the other side
 // already holds. The next synchronization with the new place publishes what
-// moved. It returns the relic conflicts the stage parked.
-func (r *Repository) moveReadSource(ctx context.Context, config core.ProjectConfig, from string) ([]core.RelicConflict, error) {
+// moved. It returns the relic conflicts the stage parked, and adds its
+// warnings to result's.
+func (r *Repository) moveReadSource(
+	ctx context.Context, config core.ProjectConfig, from string, result *MoveTasksResult,
+) ([]core.RelicConflict, error) {
 	r.switchRemote(from)
 	_, err := r.Fetch(ctx, config)
 	if err != nil {
@@ -613,6 +630,7 @@ func (r *Repository) moveReadSource(ctx context.Context, config core.ProjectConf
 	// The old place's relics now have tracking refs here, usually new ones.
 	r.noteRelicRefsMoved(from)
 	_, stage := r.syncFetchedRelics(ctx, config)
+	result.readWarnings = append(result.readWarnings, stage.warnedAt...)
 	for _, failure := range []error{stage.corruptError(), stage.newerWriterError(), stage.otherError()} {
 		if failure != nil {
 			return nil, wrapKeepingCategory("cannot read the relics from "+from, failure)
@@ -656,8 +674,8 @@ func (r *Repository) moveCopy(
 // nothing over it; the synchronization runs again, which reads the place
 // afresh, backs up what it holds now and leases on that, up to three times.
 // A tip that keeps changing is left for the verification to report. Each
-// attempt's description-merged warnings are added to result's, since a merge
-// an attempt landed is not made again by the next.
+// attempt's description-merged and relic warnings are added to result's,
+// since a merge an attempt landed is not made again by the next.
 func (r *Repository) syncDestination(
 	ctx context.Context,
 	config core.ProjectConfig,
@@ -668,8 +686,46 @@ func (r *Repository) syncDestination(
 		r.switchRemote(to)
 		run, err := r.Sync(ctx, config)
 		result.TaskWarnings = append(result.TaskWarnings, run.Fetch.TaskWarnings...)
+		result.addRelicWarnings(run.Fetch.RelicWarnings)
 		if !r.takeStaleLease() || attempt == 2 {
 			return run, err
+		}
+	}
+}
+
+// standingReadWarnings adds to result's relic warnings each the relic stage
+// reading the old place reported whose relic's ref still reaches the commit
+// that stage moved it to. The copy step that follows can move the ref to the
+// new place's history instead, as when the new place already holds this
+// checkout's save: the read step's merge then does not stand, and the copy
+// step's synchronization reports the merge that does. So does every later
+// run's read step, which merges this checkout's save onto the old place's
+// again only for the copy step to move the ref back. A ref whose history
+// cannot be read keeps its warnings: saying a merge was made that a later
+// step replaced is better than not saying one was made that stands, and the
+// report is no reason to fail a run whose copy is done. Only a cancelled run
+// returns an error.
+func (r *Repository) standingReadWarnings(ctx context.Context, result *MoveTasksResult) error {
+	for _, warned := range result.readWarnings {
+		stands, err := r.onLocalHistory(ctx, relicRefPrefix+warned.relicID, warned.next)
+		if err != nil && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if stands || err != nil {
+			result.addRelicWarnings(warned.warnings)
+		}
+	}
+	result.readWarnings = nil
+	return nil
+}
+
+// addRelicWarnings adds each of warnings that result does not hold yet. A
+// later step of the run meets what an earlier one did, and a warning it
+// reports again says nothing new.
+func (result *MoveTasksResult) addRelicWarnings(warnings []core.Warning) {
+	for _, warning := range warnings {
+		if !slices.Contains(result.RelicWarnings, warning) {
+			result.RelicWarnings = append(result.RelicWarnings, warning)
 		}
 	}
 }
@@ -926,15 +982,12 @@ func (r *Repository) carryTask(
 			return nil, nil, err
 		}
 	}
+	// A pack whose only operations this history lacks are merges of an edit
+	// it holds is held (operationAccount.covers), and is not carried.
 	missing, err := r.operationsNotIn(ctx, config, taskID, theirs.Head, mine.Head, exclude)
 	if err != nil {
 		return nil, nil, err
 	}
-	// A pack whose only operations this history lacks are merges of an edit
-	// it holds is held (derivedFromHeld), and there is nothing to carry.
-	missing = slices.DeleteFunc(missing, func(commit OperationCommit) bool {
-		return derivedFromHeld(commit.Operation, held.has)
-	})
 	if len(missing) == 0 {
 		return nil, nil, nil
 	}
@@ -1395,7 +1448,7 @@ func (r *Repository) markTasksReturned(ctx context.Context, to, from string) (st
 // else is compared by operation ID, because a task carried by replay holds
 // the same operations under other commits. A description merge the new place
 // does not record counts as held when the edit it merged is held there
-// (derivedFromHeld): a replay there merged that edit itself. A history at the
+// (operationAccount.covers): a replay there merged that edit itself. A history at the
 // new place that records an operation twice fails the run too.
 func (r *Repository) verifyMovedTasks(
 	ctx context.Context, config core.ProjectConfig, from, to string, result *MoveTasksResult, shortfall *moveShortfall,
@@ -1493,8 +1546,7 @@ func (r *Repository) verifyMovedTasks(
 				if _, err := held.match(name, commit.ObjectID, commit.Operation); err != nil {
 					return wrapKeepingCategory(fmt.Sprintf("%s and %s disagree about task %s", from, to, name), err)
 				}
-				if account.covers(commit) || aside.covers(commit) ||
-					derivedFromHeld(commit.Operation, account.has) || derivedFromHeld(commit.Operation, aside.has) {
+				if account.covers(commit) || aside.covers(commit) {
 					continue
 				}
 				for _, operation := range commit.Operation.Operations {

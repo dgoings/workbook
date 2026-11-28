@@ -226,3 +226,150 @@ func requireRelicMoveVerifiesFromAFreshClone(t *testing.T, origin, tasks, from, 
 		t.Fatalf("the verification from a fresh clone counted no relic: %+v", result)
 	}
 }
+
+// The relic counterpart of TestMoveTasksForwardOntoACarriedMergeAfterACompaction.
+// After the straggler is carried and the tasks move back, the mover saves the
+// part again on the teammate's line, retires the relic and compacts it at the
+// old place: the checkpoint lists the teammate's save and not the merge the
+// new place recorded with it. Moving the tasks forward again counts the new
+// place's carried pack as held, since its merge is derived from a listed
+// save, so the checkpoint is leased over that copy, the later body stands and
+// a further run changes nothing.
+func TestMoveTasksForwardOntoACarriedRelicBodyMergeAfterACompaction(t *testing.T) {
+	t.Parallel()
+	for _, objectFormat := range []string{testrepo.FormatSHA1, testrepo.FormatSHA256} {
+		t.Run(objectFormat, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			s := newRelicStraggler(t, objectFormat)
+			fixture, ref := s.fixture, relicRef(s.relicID)
+			if _, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{}); err != nil {
+				t.Fatalf("MoveTasks() again = %v", err)
+			}
+			newPlace := core.TasksRemoteSetting{Name: "tasks", URL: fixture.tasks}
+			// A teammate on the new settings reads the carried copy there.
+			reader, readerConfig := checkoutOn(t, fixture.origin, newPlace)
+			if got, want := relicRefHead(t, reader, s.relicID), syncGit(t, fixture.tasks, "rev-parse", ref); got != want {
+				t.Fatalf("the reader holds %s, want the new place's tip %s", got, want)
+			}
+			first, config := pullSettings(t, fixture.first, core.TasksRemoteSetting{})
+			if result, err := first.MoveTasks(ctx, config, MoveTasksOptions{}); err != nil || !result.Verified {
+				t.Fatalf("MoveTasks() back = %+v, %v, want it verified", result, err)
+			}
+
+			mover := relicServiceFor(first, config, 400000)
+			version := shownPart(t, shownRelic(t, mover, s.relicID), s.part).Body.Version
+			later := strings.Replace(mergeText(2, 5), "TWO", "two, saved later", 1)
+			if _, err := mover.Update(ctx, s.relicID, []core.RelicEdit{saveBody(s.part, version, later)}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := mover.Retire(ctx, s.relicID); err != nil {
+				t.Fatal(err)
+			}
+			checkpoint := writeRelicCheckpoint(t, first, config, readRelicTip(t, first, config, s.relicID), core.RelicBoundaryRetired)
+			syncClean(t, first, config)
+			if got := syncGit(t, fixture.origin, "rev-parse", ref); got != checkpoint.Head {
+				t.Fatalf("origin holds %s, want the checkpoint %s", got, checkpoint.Head)
+			}
+
+			first, config = pullSettings(t, first, newPlace)
+			result, err := first.MoveTasks(ctx, config, MoveTasksOptions{})
+			if err != nil || !result.Verified {
+				t.Fatalf("MoveTasks() forward = %+v, %v, want it verified", result, err)
+			}
+			if got := syncGit(t, fixture.tasks, "rev-parse", ref); got != checkpoint.Head {
+				t.Fatalf("the new place holds %s, want the checkpoint %s with nothing replayed onto it", got, checkpoint.Head)
+			}
+			assertShownBody(t, relicServiceFor(first, config, 500000), s.relicID, s.part, later)
+			assertReplayedHistory(t, first, config, s.relicID, checkpoint.Head)
+			requireRelicMoveVerifiesFromAFreshClone(t, fixture.origin, fixture.tasks, "origin", "tasks")
+
+			again, err := first.MoveTasks(ctx, config, MoveTasksOptions{})
+			if err != nil || !again.Verified || again.Stragglers != nil || len(again.SetAside) != 0 || len(again.Replaced) != 0 {
+				t.Fatalf("MoveTasks() forward again = %+v, %v, want quiet", again, err)
+			}
+			if got := syncGit(t, fixture.tasks, "rev-parse", ref); got != checkpoint.Head {
+				t.Fatalf("the new place moved to %s on a further run, want %s", got, checkpoint.Head)
+			}
+
+			// The reader adopts the checkpoint with nothing of its own to keep.
+			syncClean(t, reader, readerConfig)
+			if got := relicRefHead(t, reader, s.relicID); got != checkpoint.Head {
+				t.Fatalf("the reader holds %s, want the checkpoint %s", got, checkpoint.Head)
+			}
+			assertShownBody(t, relicServiceFor(reader, readerConfig, 600000), s.relicID, s.part, later)
+			assertNoParkedRelics(t, reader)
+		})
+	}
+}
+
+// The run that carries the relic straggler merges the mover's save onto the
+// teammate's, and says so once, as a synchronization does; a further run,
+// which merges nothing that stands, says nothing.
+func TestMoveTasksReportsARelicBodyMergeOnce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := newRelicStraggler(t, testrepo.FormatSHA1)
+	result, err := s.fixture.first.MoveTasks(ctx, s.fixture.config, MoveTasksOptions{})
+	if err != nil {
+		t.Fatalf("MoveTasks() again = %v", err)
+	}
+	merged := 0
+	for _, warning := range result.RelicWarnings {
+		if warning.Code == core.WarningRelicBodyMerged {
+			merged++
+		}
+	}
+	if merged != 1 || len(result.RelicWarnings) != 1 {
+		t.Fatalf("RelicWarnings = %+v, want one relic-body-merged", result.RelicWarnings)
+	}
+	again, err := s.fixture.first.MoveTasks(ctx, s.fixture.config, MoveTasksOptions{})
+	if err != nil || len(again.RelicWarnings) != 0 {
+		t.Fatalf("MoveTasks() a third time = %+v, %v, want no relic warning", again.RelicWarnings, err)
+	}
+}
+
+// A move whose read step merges this checkout's unpublished save onto a save
+// the old place holds, with the new place holding neither, publishes that
+// merge to the new place and says so once.
+func TestMoveTasksReportsARelicBodyMergeMadeReadingTheOldPlace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newMoveFixture(t, testrepo.FormatSHA1)
+	teammate := relicServiceFor(fixture.second, fixture.stale, 200000)
+	created, err := teammate.Create(ctx, core.RelicCreateInput{Title: "Plan", Type: "paper", Parts: []core.RelicPartInput{{
+		Type: "section", Body: &core.RelicBodyInput{Format: "md", Content: []byte(mergeText())},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncClean(t, fixture.second, fixture.stale)
+	relicID, part, version := created.Relic.ID, created.Parts[0].ID, created.Parts[0].Body.Version
+	ref := relicRef(relicID)
+	syncGit(t, fixture.first.Root, "fetch", "--quiet", fixture.origin, ref+":"+ref)
+	mover := relicServiceFor(fixture.first, fixture.config, 100000)
+	if _, err := mover.Update(ctx, relicID, []core.RelicEdit{saveBody(part, version, mergeText(5))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := teammate.Update(ctx, relicID, []core.RelicEdit{saveBody(part, version, mergeText(2))}); err != nil {
+		t.Fatal(err)
+	}
+	syncClean(t, fixture.second, fixture.stale)
+
+	result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
+	if err != nil || !result.Verified {
+		t.Fatalf("MoveTasks() = %+v, %v", result, err)
+	}
+	if len(result.RelicWarnings) != 1 || result.RelicWarnings[0].Code != core.WarningRelicBodyMerged ||
+		!strings.Contains(result.RelicWarnings[0].Message, "on origin as version") {
+		t.Fatalf("RelicWarnings = %+v, want the read step's one relic-body-merged", result.RelicWarnings)
+	}
+	assertShownBody(t, mover, relicID, part, mergeText(2, 5))
+	if got, want := syncGit(t, fixture.tasks, "rev-parse", ref), relicRefHead(t, fixture.first, relicID); got != want {
+		t.Fatalf("the new place holds %s, want the merged tip %s", got, want)
+	}
+	again, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
+	if err != nil || len(again.RelicWarnings) != 0 {
+		t.Fatalf("MoveTasks() again = %+v, %v, want no relic warning", again.RelicWarnings, err)
+	}
+}

@@ -770,8 +770,10 @@ func (r *Repository) ValidateTaskHeadAdvancesWithCompactions(
 
 	// Reconciliation and compaction are the two things that legitimately move
 	// a canonical ref off its previous tip. Reconciliation parks that tip in
-	// the process, so the parked ref is the evidence that distinguishes a
-	// replay from a ref rolled backwards by corruption. Compaction parks
+	// the process, or a descendant of it when the ref moved on before the
+	// projection caught up (withoutParkedAncestors), so the parked ref is the
+	// evidence that distinguishes a replay from a ref rolled backwards by
+	// corruption. Compaction parks
 	// nothing, because parking would keep the history it drops alive; its
 	// evidence is a checkpoint that accounts for every operation the previous
 	// tip held, proven for every unparked advance at once. Both cost Git
@@ -785,6 +787,9 @@ func (r *Repository) ValidateTaskHeadAdvancesWithCompactions(
 		if _, found := parked[advance.Current.TaskID][advance.Previous.Head]; !found {
 			unparked = append(unparked, advance)
 		}
+	}
+	if unparked, err = r.withoutParkedAncestors(ctx, unparked, parked); err != nil {
+		return nil, err
 	}
 	if len(unparked) == 0 {
 		return nil, nil
@@ -804,6 +809,65 @@ func (r *Repository) ValidateTaskHeadAdvancesWithCompactions(
 		)
 	}
 	return compacted, nil
+}
+
+// withoutParkedAncestors returns the advances whose previous head is not an
+// ancestor of a tip parked for the same task. Such a head is evidence of a
+// reconciliation as good as a parked tip itself: the ref moved on from it
+// before the reconciliation that parked its descendant, with nothing
+// recording the step in between, as when move-tasks carries a straggler onto
+// the ref and then moves the tasks back over it. Every operation the previous
+// head holds is still held by the parked tip.
+//
+// It costs one rev-list over the parked tips of those tasks, bounded by the
+// current heads: the previous head is not reachable from its current head, so
+// it is listed exactly when a parked tip reaches it. A commit belongs to one
+// task's history, so a tip parked for another task cannot reach it. A walk
+// that fails proves nothing, and the advances it was asked about stay refused.
+func (r *Repository) withoutParkedAncestors(
+	ctx context.Context,
+	advances []HeadAdvance,
+	parked map[string]map[string]struct{},
+) ([]HeadAdvance, error) {
+	var input bytes.Buffer
+	var candidates int
+	for _, advance := range advances {
+		tips := parked[advance.Current.TaskID]
+		if len(tips) == 0 {
+			continue
+		}
+		candidates++
+		for tip := range tips {
+			fmt.Fprintln(&input, tip)
+		}
+	}
+	if candidates == 0 {
+		return advances, nil
+	}
+	for _, advance := range advances {
+		if len(parked[advance.Current.TaskID]) > 0 {
+			fmt.Fprintf(&input, "^%s\n", advance.Current.ObjectID)
+		}
+	}
+	output, err := r.Git(ctx, input.Bytes(), "rev-list", "--stdin")
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return advances, nil
+	}
+	reachable := make(map[string]struct{})
+	for _, line := range strings.Fields(string(output)) {
+		reachable[line] = struct{}{}
+	}
+	kept := advances[:0:0]
+	for _, advance := range advances {
+		if _, found := reachable[advance.Previous.Head]; found && len(parked[advance.Current.TaskID]) > 0 {
+			continue
+		}
+		kept = append(kept, advance)
+	}
+	return kept, nil
 }
 
 // missingPreviousHead explains a failed ancestry walk whose cause is a

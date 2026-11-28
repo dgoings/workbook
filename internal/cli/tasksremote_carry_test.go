@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/testenv"
 	"github.com/dgoings/workbook/internal/testrepo"
 )
@@ -788,4 +789,103 @@ func TestMoveTasksCleanUpDeletesNothingWhileARefNamedForThisProjectCannotBeCarri
 			t.Fatalf("origin's task and relic refs after %v:\n%s\nwant\n%s", args, after, before)
 		}
 	}
+}
+
+// The run that carries a straggler moves the mover's task ref onto the
+// replayed history, and the projection still names the tip before it. Moving
+// the tasks back then replays the mover's history onto the old place's and
+// parks the carried tip, which the projection never recorded. The checkout
+// still reads and writes the task straight afterwards: the tip the projection
+// last recorded is an ancestor of the parked one, which is as good evidence
+// of a reconciliation as the parked tip itself.
+func TestMoveTasksBackOverACarriedStragglerLeavesTheCheckoutReadable(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA1)
+	teammate := cloneCode(t, project)
+	if code, stdout, stderr := run(t, teammate, "setup"); code != 0 {
+		t.Fatalf("teammate setup = (%d, %q, %q)", code, stdout, stderr)
+	}
+	edited := project.ids[0]
+	straggler(t, teammate, edited, "--title", "Retitled by the teammate before they heard about the move")
+	project.moveTasks(t)
+	if code, _, stderr := run(t, project.seed, "update", edited, "--description", "Described at the new place"); code != 0 {
+		t.Fatalf("seed update = %d; stderr = %q", code, stderr)
+	}
+	publishStraggler(t, teammate, edited)
+	if carried := moveTasksAgain(t, project, 0); carried.Stragglers == nil {
+		t.Fatalf("move-tasks = %+v, want the teammate's edit carried", carried)
+	}
+
+	if code, stdout, stderr := run(t, project.seed, "config", "unset", "tasks-remote"); code != 0 {
+		t.Fatalf("config unset = (%d, %q, %q)", code, stdout, stderr)
+	}
+	moveTasksAgain(t, project, 0)
+	for _, args := range [][]string{
+		{"list", "--json"},
+		{"show", edited, "--json"},
+		{"update", edited, "--priority", "high", "--no-sync", "--json"},
+	} {
+		if code, stdout, stderr := run(t, project.seed, args...); code != 0 {
+			t.Fatalf("%v after the move back = (%d, %q, %q), want it to succeed", args, code, stdout, stderr)
+		}
+	}
+	shown := cliShowTask(t, project.seed, edited)
+	if shown.Title != "Retitled by the teammate before they heard about the move" || shown.Description != "Described at the new place" {
+		t.Fatalf("task after the move back = %+v, want both edits", shown)
+	}
+}
+
+// A teammate's relic body save that reached the old place just as the tasks
+// moved is merged onto the mover's when the next run carries it, and the run
+// says so in its envelope, once, as a sync does; a further run says nothing.
+func TestMoveTasksReportsARelicBodyMergeInItsEnvelope(t *testing.T) {
+	t.Parallel()
+	project := codeProject(t, testrepo.FormatSHA1)
+	id := mustCreateRelic(t, project.seed, "Merge plan", "--type", "paper").Relic.ID
+	part := mustUpdateRelic(t, project.seed, id, "--add-part", "--part-type", "section",
+		"--body-file", writeRelicBodyFile(t, "v1.md", updateMergeV1)).Parts[0].ID
+	v1 := shownPartBodyVersion(t, project.seed, id, part)
+	teammate := cloneCode(t, project)
+	if code, stdout, stderr := run(t, teammate, "setup"); code != 0 {
+		t.Fatalf("teammate setup = (%d, %q, %q)", code, stdout, stderr)
+	}
+	mustUpdateRelic(t, teammate, id, "--part", part, "--body-file", writeRelicBodyFile(t, "v2.md", updateMergeV2),
+		"--base", v1, "--no-sync")
+	project.moveTasks(t)
+	mustUpdateRelic(t, project.seed, id, "--part", part, "--body-file", writeRelicBodyFile(t, "line5.md", updateMergeLine5),
+		"--base", v1)
+	ref := "refs/workbook/relics/" + id
+	cliGit(t, teammate, "push", "--quiet", "--no-verify", "origin", ref+":"+ref)
+
+	code, stdout, stderr := run(t, project.seed, "move-tasks", "--json")
+	if code != 0 {
+		t.Fatalf("move-tasks = (%d, %q, %q)", code, stdout, stderr)
+	}
+	envelope := decodeRelicSyncEnvelope(t, stdout, "move-tasks")
+	if len(envelope.Warnings) != 1 || envelope.Warnings[0].Code != core.WarningRelicBodyMerged ||
+		!strings.Contains(envelope.Warnings[0].Message, "relic "+id+": part "+part+": ") {
+		t.Fatalf("move-tasks warnings = %+v, want one relic-body-merged for %s", envelope.Warnings, id)
+	}
+	if text := relicBodyText(t, project.seed, id, part); text != updateMergeMerged {
+		t.Fatalf("body = %q, want both saves", text)
+	}
+	code, stdout, stderr = run(t, project.seed, "move-tasks", "--json")
+	if code != 0 {
+		t.Fatalf("move-tasks again = (%d, %q, %q)", code, stdout, stderr)
+	}
+	if again := decodeRelicSyncEnvelope(t, stdout, "move-tasks"); len(again.Warnings) != 0 {
+		t.Fatalf("move-tasks again warnings = %+v, want none", again.Warnings)
+	}
+}
+
+// shownPartBodyVersion is the version of a part's body as relic show reports it.
+func shownPartBodyVersion(t *testing.T, repository, id, part string) string {
+	t.Helper()
+	for _, shown := range shownRelic(t, repository, id).Parts {
+		if shown.ID == part && shown.Body != nil {
+			return shown.Body.Version
+		}
+	}
+	t.Fatalf("relic %s has no part %s with a body", id, part)
+	return ""
 }

@@ -719,31 +719,8 @@ func TestMoveTasksBackAfterACarriedDescriptionMerge(t *testing.T) {
 func moveBackAfterACarriedDescriptionMerge(t *testing.T, objectFormat string, withTitle bool) {
 	ctx := context.Background()
 	fixture := newMoveFixture(t, objectFormat)
-	task := fixture.ids[0]
-	setSyncTaskDescription(t, fixture.second, fixture.stale, task, sixLines(nil))
-	syncClean(t, fixture.second, fixture.stale)
+	task, title, carried := carryADescriptionStraggler(t, fixture, withTitle)
 	ref := taskRefPrefix + task
-	syncGit(t, fixture.first.Root, "fetch", "--quiet", "--no-tags", "origin", "+"+ref+":"+ref)
-	setSyncTaskDescription(t, fixture.first, fixture.config, task, sixLines(map[int]string{5: "the mover's line 5"}))
-	teammates := sixLines(map[int]string{2: "the teammate's line 2"})
-	input := core.UpdateInput{Description: &teammates}
-	title := "Retitled by the teammate"
-	if withTitle {
-		input.Title = &title
-	}
-	if _, err := syncService(fixture.second, fixture.stale).UpdateMutation(ctx, task, input); err != nil {
-		t.Fatal(err)
-	}
-	syncClean(t, fixture.second, fixture.stale)
-
-	if _, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{}); err != nil {
-		t.Fatalf("MoveTasks() = %v", err)
-	}
-	carried := syncGit(t, fixture.tasks, "rev-parse", ref)
-	if pack := currentSnapshotAt(t, fixture.first, fixture.config, task, carried).Operation; pack.Operations[len(pack.Operations)-1].Type != core.OperationDescriptionMerge {
-		t.Fatalf("the new place's tip records %+v, want the carried edit with its merge", pack.Operations)
-	}
-
 	first, config := pullSettings(t, fixture.first, core.TasksRemoteSetting{})
 	result, err := first.MoveTasks(ctx, config, MoveTasksOptions{})
 	if err != nil {
@@ -777,6 +754,42 @@ func moveBackAfterACarriedDescriptionMerge(t *testing.T, objectFormat string, wi
 	if got := syncGit(t, fixture.tasks, "rev-parse", ref); got != carried {
 		t.Fatalf("the new place moved to %s on the second run, want %s", got, carried)
 	}
+}
+
+// carryADescriptionStraggler makes the new place hold a teammate's edit to
+// line 2 of the first task, published at the old place, in a pack with the
+// merge the move made carrying it onto the mover's edit to line 5:
+// [field.set S, description.merge M] at the new place and [field.set S] at the
+// old one. With withTitle the teammate's pack retitles the task too. It
+// returns the task, the teammate's title and the new place's tip.
+func carryADescriptionStraggler(t *testing.T, fixture moveFixture, withTitle bool) (task, title, carried string) {
+	t.Helper()
+	ctx := context.Background()
+	task = fixture.ids[0]
+	setSyncTaskDescription(t, fixture.second, fixture.stale, task, sixLines(nil))
+	syncClean(t, fixture.second, fixture.stale)
+	ref := taskRefPrefix + task
+	syncGit(t, fixture.first.Root, "fetch", "--quiet", "--no-tags", "origin", "+"+ref+":"+ref)
+	setSyncTaskDescription(t, fixture.first, fixture.config, task, sixLines(map[int]string{5: "the mover's line 5"}))
+	teammates := sixLines(map[int]string{2: "the teammate's line 2"})
+	input := core.UpdateInput{Description: &teammates}
+	title = "Retitled by the teammate"
+	if withTitle {
+		input.Title = &title
+	}
+	if _, err := syncService(fixture.second, fixture.stale).UpdateMutation(ctx, task, input); err != nil {
+		t.Fatal(err)
+	}
+	syncClean(t, fixture.second, fixture.stale)
+
+	if _, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{}); err != nil {
+		t.Fatalf("MoveTasks() = %v", err)
+	}
+	carried = syncGit(t, fixture.tasks, "rev-parse", ref)
+	if pack := currentSnapshotAt(t, fixture.first, fixture.config, task, carried).Operation; pack.Operations[len(pack.Operations)-1].Type != core.OperationDescriptionMerge {
+		t.Fatalf("the new place's tip records %+v, want the carried edit with its merge", pack.Operations)
+	}
+	return task, title, carried
 }
 
 // requireMoveVerifiesFromAFreshClone runs the move's verification, of a move

@@ -1079,10 +1079,13 @@ func relicOperationSet(packs []core.RelicOperationPack, extra []string) map[stri
 }
 
 // localAccountsForRemote reports whether the local chain is rooted at a
-// checkpoint and every operation on origin's chain is in that checkpoint's
-// list or on the local chain. That is the condition for publishing the local
-// tip over origin's with a lease (Decision 20), and for a fetch to leave it
-// waiting for that push.
+// checkpoint and every pack on origin's chain is held by it: each operation is
+// in that checkpoint's list or on the local chain, or is a body merge derived
+// from one that is (relicPackHeldBy). That is the condition for publishing the
+// local tip over origin's with a lease (Decision 20), and for a fetch to leave
+// it waiting for that push. A checkpoint lists a save and not the merge
+// another place recorded with it when the tasks moved, so without the derived
+// rule origin's copy holding that merge would never be accounted for.
 func (sides relicSides) localAccountsForRemote() bool {
 	summary, ok := rootCheckpoint(sides.localPacks)
 	if !ok {
@@ -1090,10 +1093,8 @@ func (sides relicSides) localAccountsForRemote() bool {
 	}
 	accounted := relicOperationSet(sides.localPacks, summary.CompactedOperations)
 	for _, pack := range sides.remotePacks {
-		for _, operation := range pack.Operations {
-			if _, found := accounted[operation.ID]; !found {
-				return false
-			}
+		if !relicPackHeldBy(pack, accounted) {
+			return false
 		}
 	}
 	return true
@@ -1218,14 +1219,11 @@ func (r *Repository) reconcileCompactedRelic(
 	}
 }
 
-// relicPackHeldBy reports whether held names every operation of pack.
+// relicPackHeldBy reports whether held holds the whole of pack: every
+// operation is named in held, or is a body merge derived from one that is
+// (core.RelicPackHeldBy).
 func relicPackHeldBy(pack core.RelicOperationPack, held map[string]struct{}) bool {
-	for _, operation := range pack.Operations {
-		if _, found := held[operation.ID]; !found {
-			return false
-		}
-	}
-	return true
+	return core.RelicPackHeldBy(pack, func(id string) bool { _, found := held[id]; return found })
 }
 
 // replayAcrossGenerations replays chain[1:] onto request.Remote, with chain[0]
