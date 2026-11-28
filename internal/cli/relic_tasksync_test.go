@@ -45,7 +45,7 @@ func runTaskCommandWithSync(t *testing.T, repository string, args ...string) rel
 func TestATaskCommandLeavesOriginsRelicsThere(t *testing.T) {
 	t.Parallel()
 	for name, args := range map[string][]string{
-		"relic create": {"relic", "create", "Made here", "--type", "spec"},
+		"relic create": {"relic", "create", "Made here", "--type", "paper"},
 		"fetch":        {"fetch"},
 		"sync":         {"sync"},
 	} {
@@ -53,7 +53,7 @@ func TestATaskCommandLeavesOriginsRelicsThere(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			first, second := cliSyncRepositories(t)
-			relicID := mustCreateRelic(t, first, "Published elsewhere", "--type", "spec").Relic.ID
+			relicID := mustCreateRelic(t, first, "Published elsewhere", "--type", "paper").Relic.ID
 			published := originRelicHead(t, first, relicID)
 			if published == "" {
 				t.Fatalf("relic create did not publish %s", relicID)
@@ -94,7 +94,7 @@ func TestATaskCommandLeavesALocalRelicUnpublished(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			_, second := cliSyncRepositories(t)
-			relicID := mustCreateRelic(t, second, "Kept here", "--type", "spec", "--no-sync").Relic.ID
+			relicID := mustCreateRelic(t, second, "Kept here", "--type", "paper", "--no-sync").Relic.ID
 
 			task := runTaskCommandWithSync(t, second, "create", "A task")
 			var created core.Task
@@ -203,9 +203,9 @@ func TestATaskCommandsGitWorkNamesNoRelicRef(t *testing.T) {
 	t.Parallel()
 	binary := buildWorkbookBinary(t)
 	first, second := cliSyncRepositories(t)
-	mustCreateRelic(t, first, "On origin", "--type", "spec")
-	mustCreateRelic(t, second, "Here and on origin", "--type", "spec")
-	mustCreateRelic(t, second, "Only here", "--type", "spec", "--no-sync")
+	mustCreateRelic(t, first, "On origin", "--type", "paper")
+	mustCreateRelic(t, second, "Here and on origin", "--type", "paper")
+	mustCreateRelic(t, second, "Only here", "--type", "paper", "--no-sync")
 	task := runTaskCommandWithSync(t, second, "create", "A task")
 	var created core.Task
 	if err := json.Unmarshal(task.Data, &created); err != nil {
@@ -231,7 +231,7 @@ func TestATaskCommandsGitWorkNamesNoRelicRef(t *testing.T) {
 	if len(cost.connections) != 0 {
 		t.Errorf("show connected to a remote: %v", cost.connections)
 	}
-	cost, _ = tracedCommand(t, binary, second, nil, "relic", "create", "Traced relic", "--type", "spec", "--json")
+	cost, _ = tracedCommand(t, binary, second, nil, "relic", "create", "Traced relic", "--type", "paper", "--json")
 	if len(relicGitWork(cost)) == 0 {
 		t.Fatalf("relic create names no relic ref; the trace is not seeing what it should:\n%s", strings.Join(cost.lines, "\n"))
 	}

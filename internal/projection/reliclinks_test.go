@@ -59,7 +59,7 @@ func linkedRelics(t *testing.T, repository *gitstore.Repository, config core.Pro
 		core.RelicEdit{Kind: core.RelicEditAddLink, Target: tasks[0], Rel: "relates-to"},
 		core.RelicEdit{Kind: core.RelicEditAddLink, Target: tasks[1], From: relicPartIDOf(t, repository, config, relics[0], 0), Rel: "implemented-by"})
 	linkRelic(t, service, relics[1],
-		core.RelicEdit{Kind: core.RelicEditAddLink, Target: tasks[0], From: relicPartIDOf(t, repository, config, relics[1], 1), Rel: "decided-by"})
+		core.RelicEdit{Kind: core.RelicEditAddLink, Target: tasks[0], From: relicPartIDOf(t, repository, config, relics[1], 1), Rel: "decided-in"})
 	linkRelic(t, service, relics[2], core.RelicEdit{Kind: core.RelicEditAddLink, Target: tasks[1], Rel: "relates-to"})
 	return service, relics, tasks
 }
@@ -177,7 +177,7 @@ func TestRelicLinksAreIndexedByBothEnds(t *testing.T) {
 		for _, source := range first.Sources {
 			got = append(got, fmt.Sprintf("%s %d %s", source.Relic.ID, source.PartOrdinal, source.Link.Rel))
 		}
-		want := []string{relics[0] + " -1 relates-to", relics[1] + " 1 decided-by"}
+		want := []string{relics[0] + " -1 relates-to", relics[1] + " 1 decided-in"}
 		if !slices.Equal(got, want) {
 			t.Fatalf("RelicLinksTo(task 0) = %q, want %q", got, want)
 		}
@@ -371,7 +371,7 @@ func relicLinkMutations(t *testing.T, repository *gitstore.Repository, config co
 		},
 		func() {
 			linkRelic(t, service, ids[1], core.RelicEdit{Kind: core.RelicEditAddLink, Target: task,
-				From: relicPartIDOf(t, repository, config, ids[1], 0), Rel: "decided-by"})
+				From: relicPartIDOf(t, repository, config, ids[1], 0), Rel: "decided-in"})
 		},
 		func() {
 			linkRelic(t, service, ids[1], core.RelicEdit{Kind: core.RelicEditRemoveLink, Link: links(ids[1])[0].ID})

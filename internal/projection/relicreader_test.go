@@ -44,7 +44,7 @@ func relicReaderFixture(t *testing.T, repository *gitstore.Repository, config co
 	}
 
 	shapes, err := service.Create(ctx, core.RelicCreateInput{
-		Title: "Shapes", Type: "spec",
+		Title: "Shapes", Type: "paper",
 		Properties: map[string]json.RawMessage{
 			"meta":  json.RawMessage(`{"z":1,"a":[true,null,{"deep":"x"}]}`),
 			"count": json.RawMessage(`1.5`),
@@ -69,7 +69,7 @@ func relicReaderFixture(t *testing.T, repository *gitstore.Repository, config co
 	if _, err := service.Update(ctx, shapes.Relic.ID, []core.RelicEdit{
 		{Kind: core.RelicEditAddLink, Target: live, Rel: "relates-to"},
 		{Kind: core.RelicEditAddLink, Target: deletedTask, From: shapes.Parts[0].ID, Rel: "implemented-by"},
-		{Kind: core.RelicEditAddLink, Target: live, From: gone, Rel: "decided-by"},
+		{Kind: core.RelicEditAddLink, Target: live, From: gone, Rel: "decided-in"},
 	}); err != nil {
 		t.Fatal(err)
 	}

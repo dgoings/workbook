@@ -69,17 +69,17 @@ type relicsToCompact struct {
 func newRelicsToCompact(t *testing.T, repository string, extra ...string) relicsToCompact {
 	t.Helper()
 	var f relicsToCompact
-	f.retired = mustCreateRelic(t, repository, append([]string{"Retired plan", "--type", "plan"}, extra...)...).Relic.ID
+	f.retired = mustCreateRelic(t, repository, append([]string{"Retired plan", "--type", "agenda"}, extra...)...).Relic.ID
 	parts := addRelicParts(t, repository, f.retired, "section", "note")
 	f.live, f.removed = parts[0], parts[1]
 	mustUpdateRelic(t, repository, f.retired, append([]string{"--part", f.removed,
 		"--body-file", writeRelicBodyFile(t, "note.md", "dropped text\n")}, extra...)...)
 	mustUpdateRelic(t, repository, f.retired, append([]string{"--remove-part", f.removed}, extra...)...)
 	mustRelic(t, repository, nil, append([]string{"retire", f.retired}, extra...)...)
-	f.deleted = mustCreateRelic(t, repository, append([]string{"Deleted spec", "--type", "spec"}, extra...)...).Relic.ID
+	f.deleted = mustCreateRelic(t, repository, append([]string{"Deleted spec", "--type", "paper"}, extra...)...).Relic.ID
 	addRelicParts(t, repository, f.deleted, "section", "section")
 	mustRelic(t, repository, nil, append([]string{"delete", f.deleted}, extra...)...)
-	f.kept = mustCreateRelic(t, repository, append([]string{"Current spec", "--type", "spec"}, extra...)...).Relic.ID
+	f.kept = mustCreateRelic(t, repository, append([]string{"Current spec", "--type", "paper"}, extra...)...).Relic.ID
 	return f
 }
 
@@ -399,7 +399,7 @@ func TestCompactRelicsSkipsUnpushedEvenWithoutSync(t *testing.T) {
 	t.Parallel()
 	forBothRelicFormats(t, func(t *testing.T, objectFormat string) {
 		first, _ := relicSyncPairIn(t, objectFormat)
-		relicID := mustCreateRelic(t, first, "Never published", "--type", "spec", "--no-sync").Relic.ID
+		relicID := mustCreateRelic(t, first, "Never published", "--type", "paper", "--no-sync").Relic.ID
 		mustRelic(t, first, nil, "retire", relicID, "--no-sync")
 		head := relicHeadOf(t, first, relicID)
 		want := []compaction.RelicSkip{{RelicID: relicID, Title: "Never published", Reason: compaction.ReasonNotPushed}}
@@ -655,17 +655,17 @@ func TestEveryLinkIntoCompactedRelicResolves(t *testing.T) {
 	forBothRelicFormats(t, func(t *testing.T, objectFormat string) {
 		repository, _ := relicSyncPairIn(t, objectFormat)
 		task := decodeMutationTask(t, mustRun(t, repository, "create", "Implement compaction", "--json"), "create")
-		relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+		relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 		parts := addRelicParts(t, repository, relicID, "section", "note")
 		live, dropped := parts[0], parts[1]
 		mustUpdateRelic(t, repository, relicID, "--link", task.ID, "--rel", "relates-to",
 			"--link", task.ID, "--from", dropped, "--rel", "implemented-by",
-			"--link", task.ID, "--from", live, "--rel", "tested-by")
-		gone := mustCreateRelic(t, repository, "Abandoned plan", "--type", "spec").Relic.ID
+			"--link", task.ID, "--from", live, "--rel", "summarizes")
+		gone := mustCreateRelic(t, repository, "Abandoned plan", "--type", "paper").Relic.ID
 		mustUpdateRelic(t, repository, gone, "--link", task.ID, "--rel", "supersedes")
-		other := mustCreateRelic(t, repository, "Rollout", "--type", "plan").Relic.ID
+		other := mustCreateRelic(t, repository, "Rollout", "--type", "agenda").Relic.ID
 		mustUpdateRelic(t, repository, other, "--link", relicID, "--rel", "relates-to",
-			"--link", relicID+"#"+dropped, "--rel", "depends-on", "--link", gone, "--rel", "replaces")
+			"--link", relicID+"#"+dropped, "--rel", "derived-from", "--link", gone, "--rel", "changes")
 		mustUpdateRelic(t, repository, relicID, "--remove-part", dropped)
 		mustRelic(t, repository, nil, "retire", relicID)
 		mustRelic(t, repository, nil, "delete", gone)
@@ -689,7 +689,7 @@ func TestEveryLinkIntoCompactedRelicResolves(t *testing.T) {
 		text := mustRun(t, repository, "show", task.ID)
 		for _, want := range []string{
 			"\t" + relicID + " (retired)\trelates-to\tArchive plan\n",
-			"\t" + relicID + "#" + live + " (retired)\ttested-by\tArchive plan\n",
+			"\t" + relicID + "#" + live + " (retired)\tsummarizes\tArchive plan\n",
 		} {
 			if !strings.Contains(text, want) {
 				t.Errorf("show = %q, want %q", text, want)
@@ -701,7 +701,7 @@ func TestEveryLinkIntoCompactedRelicResolves(t *testing.T) {
 		matches := mustRun(t, repository, "relic", "list", "--linked-to", task.ID, "--all")
 		for _, want := range []string{
 			"\trelic\trelates-to (retired)\n",
-			"\t" + live + "\ttested-by (retired)\n",
+			"\t" + live + "\tsummarizes (retired)\n",
 			"\trelic\tsupersedes" + goneSince + "\n",
 		} {
 			if !strings.Contains(matches, want) {
@@ -712,8 +712,8 @@ func TestEveryLinkIntoCompactedRelicResolves(t *testing.T) {
 		outgoing := mustRun(t, repository, "relic", "show", other)
 		for _, want := range []string{
 			"\trelates-to\t" + relicID + " (retired)\n",
-			"\tdepends-on\t" + relicID + "#" + dropped + removed + "\n",
-			"\treplaces\t" + gone + goneSince + "\n",
+			"\tderived-from\t" + relicID + "#" + dropped + removed + "\n",
+			"\tchanges\t" + gone + goneSince + "\n",
 		} {
 			if !strings.Contains(outgoing, want) {
 				t.Errorf("relic show of the linking relic = %q, want %q", outgoing, want)

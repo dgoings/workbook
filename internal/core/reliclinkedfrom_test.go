@@ -90,7 +90,7 @@ func TestShowListsIncomingRelicLinks(t *testing.T) {
 	}
 	first := whole.LinkedFrom[0]
 	yLink := storedLinks(store, y)[0]
-	if first.Title != store.snapshots[y].Record.State.Relic.Title || first.Type != "spec" || first.FromType != "section" ||
+	if first.Title != store.snapshots[y].Record.State.Relic.Title || first.Type != "paper" || first.FromType != "section" ||
 		first.Link != yLink.ID || first.Seen != yLink.Seen || string(first.Pointer) != `{"at":"00:14:32"}` {
 		t.Fatalf("Y's incoming link = %+v", first)
 	}
@@ -242,9 +242,9 @@ func TestRepeatedLinkToARemovedOrDeletedTargetChangesNothing(t *testing.T) {
 		}
 		requireRelicWrites(t, label, store, writes)
 	}
-	_, err := service.Update(ctx, y, []RelicEdit{{Kind: RelicEditAddLink, Target: x + "#" + xParts[0], Rel: "other"}})
+	_, err := service.Update(ctx, y, []RelicEdit{{Kind: RelicEditAddLink, Target: x + "#" + xParts[0], Rel: "relates-to"}})
 	requireRelicCategory(t, "a new link to a removed part", err, CategoryValidation, "is removed; restore it first")
-	_, err = service.Update(ctx, y, []RelicEdit{{Kind: RelicEditAddLink, Target: z, Rel: "other"}})
+	_, err = service.Update(ctx, y, []RelicEdit{{Kind: RelicEditAddLink, Target: z, Rel: "relates-to"}})
 	requireRelicCategory(t, "a new link to a deleted relic", err, CategoryValidation, "is deleted; restore it first")
 }
 

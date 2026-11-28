@@ -374,7 +374,7 @@ func TestGuidelinesRelicWorkflowRunsAsWritten(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
 	task := cliCreateTask(t, repository, "Implement compaction")
-	relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 	one := filepath.Join(t.TempDir(), "one.md")
 	if err := os.WriteFile(one, []byte("one\n"), 0o600); err != nil {
 		t.Fatal(err)

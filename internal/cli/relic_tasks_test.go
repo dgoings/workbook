@@ -19,7 +19,7 @@ func createThreeRelics(t *testing.T, repository string) []string {
 	t.Helper()
 	ids := make([]string, 0, 3)
 	for _, title := range []string{"Archive plan", "Board notes", "Release checklist"} {
-		ids = append(ids, mustCreateRelic(t, repository, title, "--type", "spec").Relic.ID)
+		ids = append(ids, mustCreateRelic(t, repository, title, "--type", "paper").Relic.ID)
 	}
 	return ids
 }
@@ -241,7 +241,7 @@ func TestRelicRefsAreSharedByFetchPushAndSync(t *testing.T) {
 		return fields[0]
 	}
 
-	pushed := mustCreateRelic(t, clone, "Pushed relic", "--type", "spec").Relic
+	pushed := mustCreateRelic(t, clone, "Pushed relic", "--type", "paper").Relic
 	if code, stdout, stderr := run(t, clone, "push"); code != 0 {
 		t.Fatalf("push = (%d, %q, %q)", code, stdout, stderr)
 	}
@@ -250,7 +250,7 @@ func TestRelicRefsAreSharedByFetchPushAndSync(t *testing.T) {
 	}
 
 	task := cliCreateTask(t, clone, "Published task")
-	synced := mustCreateRelic(t, clone, "Synced relic", "--type", "spec").Relic
+	synced := mustCreateRelic(t, clone, "Synced relic", "--type", "paper").Relic
 	if code, stdout, stderr := run(t, clone, "sync"); code != 0 {
 		t.Fatalf("sync = (%d, %q, %q)", code, stdout, stderr)
 	}
@@ -294,7 +294,7 @@ func TestRelicCommandsWorkInATasksOnlyFolder(t *testing.T) {
 	cliGit(t, folder, "config", "user.name", "Board Server")
 	cliGit(t, folder, "config", "user.email", "board@example.test")
 
-	created := mustCreateRelic(t, folder, "Relic on the board server", "--type", "spec")
+	created := mustCreateRelic(t, folder, "Relic on the board server", "--type", "paper")
 	updated := mustUpdateRelic(t, folder, created.Relic.ID, "--add-part", "--part-type", "section")
 	if len(updated.Parts) != 1 {
 		t.Fatalf("relic update --add-part = %+v, want one part", updated)
@@ -318,7 +318,7 @@ func TestResetBundlesRelics(t *testing.T) {
 	if code, stdout, stderr := run(t, clone, "setup"); code != 0 {
 		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
 	}
-	relic := mustCreateRelic(t, clone, "Only here", "--type", "spec", "--no-sync").Relic
+	relic := mustCreateRelic(t, clone, "Only here", "--type", "paper", "--no-sync").Relic
 	ref := relicRef(relic.ID)
 	before := refTips(t, clone)
 
@@ -423,7 +423,7 @@ func cloneWithAHandMadeRelicTip(t *testing.T) (clone, relicID, forged string) {
 	if code, stdout, stderr := run(t, clone, "setup"); code != 0 {
 		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
 	}
-	relicID = mustCreateRelic(t, clone, "Template relic", "--type", "spec").Relic.ID
+	relicID = mustCreateRelic(t, clone, "Template relic", "--type", "paper").Relic.ID
 	mustUpdateRelic(t, clone, relicID, "--add-part", "--part-type", "section")
 	mustUpdateRelic(t, clone, relicID, "--set", "status=draft")
 	return clone, relicID, handMadeRelicTip(t, clone, relicID)
@@ -555,7 +555,7 @@ func TestResetRefusalDescribesAnUnpublishedRelic(t *testing.T) {
 	}
 	const taskRemedies = "Run workbook sync to publish it, or reset without --no-backup to keep it in a bundle, " +
 		"or add --discard-unpublished to lose it."
-	relic := mustCreateRelic(t, clone, "Only here", "--type", "spec", "--no-sync").Relic
+	relic := mustCreateRelic(t, clone, "Only here", "--type", "paper", "--no-sync").Relic
 
 	relicsOnly, refusal := resetRefusalJSON(t, clone, 5, "--no-backup")
 	if !strings.Contains(relicsOnly, "relic "+relic.ID) || !strings.Contains(relicsOnly, taskRemedies) ||

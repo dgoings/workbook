@@ -251,15 +251,15 @@ func TestPreCompactionBuildReadsRetiredAndCompactedRelics(t *testing.T) {
 	t.Parallel()
 	binary := preRelicCompactionBinary(t)
 	writer, older := cliSyncRepositories(t)
-	held := mustCreateRelic(t, writer, "Held before", "--type", "spec").Relic.ID
+	held := mustCreateRelic(t, writer, "Held before", "--type", "paper").Relic.ID
 	addRelicParts(t, writer, held, "section")
 	if code, stdout, stderr := runBinary(t, binary, older, "sync"); code != 0 {
 		t.Fatalf("older sync = (%d, %q, %q)", code, stdout, stderr)
 	}
 	heldBefore := relicHeadOf(t, older, held)
 
-	retired := mustCreateRelic(t, writer, "Retired plan", "--type", "plan").Relic.ID
-	compacted := mustCreateRelic(t, writer, "Compacted plan", "--type", "plan").Relic.ID
+	retired := mustCreateRelic(t, writer, "Retired plan", "--type", "agenda").Relic.ID
+	compacted := mustCreateRelic(t, writer, "Compacted plan", "--type", "agenda").Relic.ID
 	part := addRelicParts(t, writer, compacted, "section")[0]
 	mustUpdateRelic(t, writer, compacted, "--remove-part", part)
 	mustRelic(t, writer, nil, "retire", held)

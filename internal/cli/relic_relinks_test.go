@@ -46,7 +46,7 @@ func TestRelicChainFollowsBothWays(t *testing.T) {
 	task := cliCreateTask(t, repository, "Compact by hand")
 	transcript := mustCreateRelic(t, repository, "Planning call", "--type", "transcript", "--no-sync").Relic.ID
 	turns := addRelicParts(t, repository, transcript, "turn", "turn")
-	spec := mustCreateRelic(t, repository, "Archive spec", "--type", "spec", "--no-sync").Relic.ID
+	spec := mustCreateRelic(t, repository, "Archive spec", "--type", "paper", "--no-sync").Relic.ID
 	section := addRelicParts(t, repository, spec, "section")[0]
 	decisions := mustCreateRelic(t, repository, "Decisions", "--type", "decision-log", "--no-sync").Relic.ID
 	decided := addRelicParts(t, repository, decisions, "decision", "decision")
@@ -146,7 +146,7 @@ func TestLinksToRemovedAndDeletedTargetsFailNoCommand(t *testing.T) {
 	repository, _ := cliSyncRepositories(t)
 	x := mustCreateRelic(t, repository, "Planning call", "--type", "transcript").Relic.ID
 	part := addRelicParts(t, repository, x, "turn")[0]
-	z := mustCreateRelic(t, repository, "Old spec", "--type", "spec").Relic.ID
+	z := mustCreateRelic(t, repository, "Old spec", "--type", "paper").Relic.ID
 	y := mustCreateRelic(t, repository, "Decisions", "--type", "decision-log").Relic.ID
 	mustUpdateRelic(t, repository, y, "--link", x+"#"+part, "--rel", "decided-in", "--link", z, "--rel", "supersedes")
 	mustUpdateRelic(t, repository, x, "--remove-part", part)
@@ -288,12 +288,12 @@ func TestRelicLinkPointersReadThroughTheIndexEqualGit(t *testing.T) {
 	repository := initializedRepository(t)
 	task := cliCreateTask(t, repository, "Compact by hand")
 	x := mustCreateRelic(t, repository, "Planning call", "--type", "transcript", "--no-sync").Relic.ID
-	y := mustCreateRelic(t, repository, "Spec", "--type", "spec", "--no-sync").Relic.ID
+	y := mustCreateRelic(t, repository, "Spec", "--type", "paper", "--no-sync").Relic.ID
 	mustUpdateRelic(t, repository, y, "--no-sync",
 		"--link", task.ID, "--rel", "implemented-by", "--pointer", `{"quote":"build it"}`,
 		"--link", x, "--rel", "decided-in", "--pointer", `{"at":"00:14:32"}`)
 	// A relic whose only link is to a task, so nothing else sends it to Git.
-	w := mustCreateRelic(t, repository, "Plan", "--type", "plan", "--no-sync").Relic.ID
+	w := mustCreateRelic(t, repository, "Plan", "--type", "agenda", "--no-sync").Relic.ID
 	mustUpdateRelic(t, repository, w, "--no-sync", "--link", task.ID, "--rel", "implemented-by", "--pointer", `{"quote":"build it"}`)
 	outputs := func() []string {
 		var got []string
@@ -340,7 +340,7 @@ func TestWarmTaskShowCostsTheSameWithRelicLinks(t *testing.T) {
 		repository := initializedRepository(t)
 		task := cliCreateTask(t, repository, "Compact by hand")
 		x := mustCreateRelic(t, repository, "Planning call", "--type", "transcript", "--no-sync").Relic.ID
-		y := mustCreateRelic(t, repository, "Spec", "--type", "spec", "--no-sync").Relic.ID
+		y := mustCreateRelic(t, repository, "Spec", "--type", "paper", "--no-sync").Relic.ID
 		args := []string{"--no-sync", "--link", task.ID, "--rel", "implemented-by"}
 		if relicLink {
 			args = append(args, "--link", x, "--rel", "decided-in")

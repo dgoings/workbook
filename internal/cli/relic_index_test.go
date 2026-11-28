@@ -59,9 +59,9 @@ func TestRelicReadsAreTheSameAfterTheIndexIsDeleted(t *testing.T) {
 			t.Parallel()
 			repository := relicRepositoryFor(t, objectFormat)
 			first := mustCreateRelic(t, repository, "--from-file", writeRelicDocumentFile(t, relicTestDocument(t)))
-			second := mustCreateRelic(t, repository, "Second", "--type", "plan")
+			second := mustCreateRelic(t, repository, "Second", "--type", "agenda")
 			mustRelic(t, repository, nil, "update", second.Relic.ID, "--title", "Second, revised")
-			deleted := mustCreateRelic(t, repository, "Deleted", "--type", "plan")
+			deleted := mustCreateRelic(t, repository, "Deleted", "--type", "agenda")
 			mustRelic(t, repository, nil, "delete", deleted.Relic.ID)
 			ids := []string{first.Relic.ID, second.Relic.ID, deleted.Relic.ID}
 
@@ -100,7 +100,7 @@ func TestRelicReadsAreTheSameAfterTheIndexIsDeleted(t *testing.T) {
 func TestRelicShowSeesAnUpdateWithoutARebuild(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	created := mustCreateRelic(t, repository, "Before", "--type", "spec")
+	created := mustCreateRelic(t, repository, "Before", "--type", "paper")
 	var shown core.RelicDocument
 	mustRelic(t, repository, &shown, "show", created.Relic.ID)
 
@@ -118,8 +118,8 @@ func TestRebuildReportsRelics(t *testing.T) {
 	if code, _, stderr := run(t, repository, "create", "A task", "--no-sync"); code != 0 {
 		t.Fatalf("create = %d; stderr = %q", code, stderr)
 	}
-	mustCreateRelic(t, repository, "One", "--type", "spec")
-	mustCreateRelic(t, repository, "Two", "--type", "spec")
+	mustCreateRelic(t, repository, "One", "--type", "paper")
+	mustCreateRelic(t, repository, "Two", "--type", "paper")
 
 	code, stdout, stderr := run(t, repository, "rebuild", "--json")
 	if code != 0 || stderr != "" {
@@ -154,7 +154,7 @@ func TestRelicCommandsInTwoWorktreesAndProcessesShareOneIndex(t *testing.T) {
 	worktrees := []string{repository, second}
 	var ids []string
 	for index := range worktrees {
-		ids = append(ids, mustCreateRelic(t, repository, fmt.Sprintf("Relic %d", index), "--type", "spec").Relic.ID)
+		ids = append(ids, mustCreateRelic(t, repository, fmt.Sprintf("Relic %d", index), "--type", "paper").Relic.ID)
 	}
 
 	const jobs = 80
@@ -221,7 +221,7 @@ func TestRelicReadsAnswerFromGitWhenATaskTipIsDamaged(t *testing.T) {
 			t.Parallel()
 			repository := relicRepositoryFor(t, objectFormat)
 			first := mustCreateRelic(t, repository, "--from-file", writeRelicDocumentFile(t, relicTestDocument(t)))
-			second := mustCreateRelic(t, repository, "Second", "--type", "plan")
+			second := mustCreateRelic(t, repository, "Second", "--type", "agenda")
 			mustRelic(t, repository, nil, "update", second.Relic.ID, "--title", "Second, revised")
 			ids := []string{first.Relic.ID, second.Relic.ID}
 			commands := [][]string{{"relic", "list", "--json"}, {"relic", "show", first.Relic.ID, "--json"}}
@@ -275,7 +275,7 @@ func TestRelicReadsAnswerFromGitWhenATaskTipIsDamaged(t *testing.T) {
 func TestRelicReadsAnswerFromGitWhenTheCacheCannotBeOpened(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	created := mustCreateRelic(t, repository, "Readable", "--type", "spec")
+	created := mustCreateRelic(t, repository, "Readable", "--type", "paper")
 	ids := []string{created.Relic.ID}
 	want := relicReadOutputs(t, repository, ids)
 	cache := relicCachePath(t, repository)

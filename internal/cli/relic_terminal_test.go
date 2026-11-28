@@ -35,7 +35,7 @@ func requireNoTerminalControl(t *testing.T, label, text string) {
 func TestRelicShowPartBodyIsExactForAPipeAndFilteredForATerminal(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Bodies", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Bodies", "--type", "paper").Relic.ID
 	hostile := "\x1b[31mRED\x1b[0m \x1b]0;pwned\x07\nsecond \xe2\x80\xaeline\r\n\n  indented\twith a tab\n"
 	binary := string([]byte{0xff, 0x1b, '[', '2', 'J', 0x00})
 	added := mustUpdateRelic(t, repository, id,
@@ -102,7 +102,7 @@ func TestRelicShowPartBodyIsExactForAPipeAndFilteredForATerminal(t *testing.T) {
 func TestRelicBodyBaseIsEchoedSafelyAndMatchedWithoutCase(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Bases", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Bases", "--type", "paper").Relic.ID
 	added := mustUpdateRelic(t, repository, id,
 		"--add-part", "--part-type", "note", "--body-file", writeRelicBodyFile(t, "first.md", "first\n"),
 		"--add-part", "--part-type", "note")

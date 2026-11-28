@@ -227,7 +227,7 @@ func relicWithLinksToTasks(t *testing.T) (*memoryRelicStore, *memoryTaskStore, R
 	result, err := service.Update(context.Background(), relicID, []RelicEdit{
 		{Kind: RelicEditAddLink, Target: linkTestTaskID(1), Rel: "relates-to"},
 		{Kind: RelicEditAddLink, Target: linkTestTaskID(2), From: goals, Rel: "implemented-by"},
-		{Kind: RelicEditAddLink, Target: linkTestTaskID(3), From: decision, Rel: "decided-by"},
+		{Kind: RelicEditAddLink, Target: linkTestTaskID(3), From: decision, Rel: "decided-in"},
 	})
 	write := requireRelicWritten(t, "links", store, 2, result, err)
 	ids := []string{write.pack.Operations[0].ID, write.pack.Operations[1].ID, write.pack.Operations[2].ID}
@@ -249,7 +249,7 @@ func TestShowMarksLinksToRemovedTasks(t *testing.T) {
 	want := []RelicDocumentLink{
 		{RelicLink: RelicLink{ID: ids[0], To: RelicLinkTarget{Task: linkTestTaskID(1)}, Rel: "relates-to"}},
 		{RelicLink: RelicLink{ID: ids[1], From: goals, To: RelicLinkTarget{Task: linkTestTaskID(2)}, Rel: "implemented-by"}, TargetRemoved: true, TargetState: RelicLinkTargetMissing},
-		{RelicLink: RelicLink{ID: ids[2], From: decision, To: RelicLinkTarget{Task: linkTestTaskID(3)}, Rel: "decided-by"}, TargetRemoved: true, TargetState: RelicLinkTargetDeleted},
+		{RelicLink: RelicLink{ID: ids[2], From: decision, To: RelicLinkTarget{Task: linkTestTaskID(3)}, Rel: "decided-in"}, TargetRemoved: true, TargetState: RelicLinkTargetDeleted},
 	}
 	if !reflect.DeepEqual(document.Links, want) {
 		t.Fatalf("Show links = %#v, want %#v", document.Links, want)

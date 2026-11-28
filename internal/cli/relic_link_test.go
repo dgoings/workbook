@@ -15,7 +15,7 @@ func linkedRelicRepository(t *testing.T) (repository string, task core.Task, rel
 	t.Helper()
 	repository = initializedRepository(t)
 	task = cliCreateTask(t, repository, "Implement compaction")
-	relicID = mustCreateRelic(t, repository, "Archive plan", "--type", "spec", "--no-sync").Relic.ID
+	relicID = mustCreateRelic(t, repository, "Archive plan", "--type", "paper", "--no-sync").Relic.ID
 	partID = addRelicParts(t, repository, relicID, "section")[0]
 	return repository, task, relicID, partID
 }
@@ -115,10 +115,10 @@ func TestRelicUpdateLinkInvocationErrors(t *testing.T) {
 	repository, task, relicID, partID := linkedRelicRepository(t)
 	head := relicHeadOf(t, repository, relicID)
 	for _, args := range [][]string{
-		{"update", relicID, "--from", partID, "--link", task.ID, "--rel", "r"},
+		{"update", relicID, "--from", partID, "--link", task.ID, "--rel", "relates-to"},
 		{"update", relicID, "--link", task.ID},
-		{"update", relicID, "--link", task.ID, "--rel", "r", "--rel", "s"},
-		{"update", relicID, "--unlink", "L", "--rel", "r"},
+		{"update", relicID, "--link", task.ID, "--rel", "relates-to", "--rel", "relates-to"},
+		{"update", relicID, "--unlink", "L", "--rel", "relates-to"},
 	} {
 		relicErrorMessage(t, repository, 2, core.CategoryInvocation, args...)
 	}
@@ -382,7 +382,7 @@ func TestRelicUpdateRelicLinkJSON(t *testing.T) {
 		link.TargetRemoved || link.TargetState != "" {
 		t.Fatalf("relic show link = %+v", link)
 	}
-	if message := relicErrorMessage(t, repository, 5, core.CategoryValidation, "update", y, "--link", x, "--rel", "r",
+	if message := relicErrorMessage(t, repository, 5, core.CategoryValidation, "update", y, "--link", x, "--rel", "relates-to",
 		"--pointer", `[1]`); !strings.Contains(message, "a link pointer must be a JSON object") {
 		t.Fatalf("--pointer [1] message = %q", message)
 	}
@@ -428,8 +428,8 @@ func TestRelicUpdatePointerInvocationErrors(t *testing.T) {
 	repository, _, relicID, _ := linkedRelicRepository(t)
 	head := relicHeadOf(t, repository, relicID)
 	for _, args := range [][]string{
-		{"update", relicID, "--pointer", "{}", "--link", relicID, "--rel", "r"},
-		{"update", relicID, "--link", relicID, "--rel", "r", "--pointer", "{}", "--pointer", "{}"},
+		{"update", relicID, "--pointer", "{}", "--link", relicID, "--rel", "relates-to"},
+		{"update", relicID, "--link", relicID, "--rel", "relates-to", "--pointer", "{}", "--pointer", "{}"},
 		{"update", relicID, "--unlink", "L", "--pointer", "{}"},
 	} {
 		relicErrorMessage(t, repository, 2, core.CategoryInvocation, args...)

@@ -76,7 +76,7 @@ func TestRelicMutationsPublishThemselves(t *testing.T) {
 	t.Parallel()
 	clone, _ := cliSyncRepositories(t)
 
-	created := runRelicJSON(t, clone, 0, "create", "Published relic", "--type", "spec")
+	created := runRelicJSON(t, clone, 0, "create", "Published relic", "--type", "paper")
 	var result core.RelicMutationResult
 	if err := json.Unmarshal(created.Data, &result); err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestRelicNoSyncAndAutoSyncOffStayLocal(t *testing.T) {
 			} else if code, _, stderr := run(t, clone, "config", "set", "auto-sync", "false", "--json"); code != 0 {
 				t.Fatalf("config set auto-sync false = %d; stderr = %q", code, stderr)
 			}
-			envelope := runRelicJSON(t, clone, 0, append([]string{"create", "Kept here", "--type", "spec"}, extra...)...)
+			envelope := runRelicJSON(t, clone, 0, append([]string{"create", "Kept here", "--type", "paper"}, extra...)...)
 			var result core.RelicMutationResult
 			if err := json.Unmarshal(envelope.Data, &result); err != nil {
 				t.Fatal(err)
@@ -150,7 +150,7 @@ func TestRelicNoSyncAndAutoSyncOffStayLocal(t *testing.T) {
 func TestRelicCreatedInOneCloneIsReadableInAnother(t *testing.T) {
 	t.Parallel()
 	first, second := cliSyncRepositories(t)
-	relicID := mustCreateRelic(t, first, "Shared plan", "--type", "plan").Relic.ID
+	relicID := mustCreateRelic(t, first, "Shared plan", "--type", "agenda").Relic.ID
 	mustUpdateRelic(t, first, relicID, "--set", "owner=board",
 		"--add-part", "--part-type", "section", "--field", "heading=Goals",
 		"--body-file", writeRelicBodyFile(t, "goals.md", "Ship the relics.\n"))
@@ -229,7 +229,7 @@ func TestRelicCommandsSyncInATasksOnlyFolder(t *testing.T) {
 	cliGit(t, folder, "config", "user.name", "Board Server")
 	cliGit(t, folder, "config", "user.email", "board@example.test")
 
-	relicID := mustCreateRelic(t, folder, "Made on the board", "--type", "spec").Relic.ID
+	relicID := mustCreateRelic(t, folder, "Made on the board", "--type", "paper").Relic.ID
 	if got, want := originRelicHead(t, folder, relicID), relicHeadOf(t, folder, relicID); got != want {
 		t.Fatalf("origin holds %q after relic create in the folder, want %s", got, want)
 	}
@@ -265,7 +265,7 @@ func newRelicBodyConflict(t *testing.T, title, base, theirs, ours, name string, 
 	t.Helper()
 	first, second := cliSyncRepositories(t)
 	state := relicBodyConflict{first: first, second: second}
-	state.relicID = mustCreateRelic(t, first, title, "--type", "spec").Relic.ID
+	state.relicID = mustCreateRelic(t, first, title, "--type", "paper").Relic.ID
 	added := mustUpdateRelic(t, first, state.relicID, "--add-part", "--part-type", "section",
 		"--body-file", writeRelicBodyFile(t, name, base))
 	state.partID, state.baseVersion = added.Parts[0].ID, added.Parts[0].Body.Version
@@ -516,11 +516,11 @@ func TestRelicCommandStopsOnItsOwnConflict(t *testing.T) {
 func TestSyncTextOutputNamesChangedRelics(t *testing.T) {
 	t.Parallel()
 	first, second := cliSyncRepositories(t)
-	unchanged := mustCreateRelic(t, first, "Already here", "--type", "spec").Relic.ID
+	unchanged := mustCreateRelic(t, first, "Already here", "--type", "paper").Relic.ID
 	if code, stdout, stderr := run(t, second, "fetch"); code != 0 {
 		t.Fatalf("fetch = (%d, %q, %q)", code, stdout, stderr)
 	}
-	created := mustCreateRelic(t, first, "New on origin", "--type", "spec").Relic.ID
+	created := mustCreateRelic(t, first, "New on origin", "--type", "paper").Relic.ID
 
 	code, stdout, stderr := run(t, second, "sync")
 	if code != 0 {

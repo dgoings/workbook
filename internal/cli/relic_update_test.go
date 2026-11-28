@@ -499,7 +499,7 @@ func addRelicParts(t *testing.T, repository, id string, types ...string) []strin
 func TestRelicSetStoresTextAndSetJSONStoresValues(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 	updated := mustUpdateRelic(t, repository, id,
 		"--set", "version=1.0", "--set-json", "count=3", "--set-json", `tags=["a","b"]`, "--set", "draft=true")
 	if !updated.Changed || len(updated.Parts) != 0 {
@@ -524,7 +524,7 @@ func TestRelicUpdateEditsPartByPart(t *testing.T) {
 		t.Run(objectFormat, func(t *testing.T) {
 			t.Parallel()
 			repository := relicRepositoryFor(t, objectFormat)
-			id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+			id := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 			notes := writeRelicBodyFile(t, "notes.md", "# Notes\n")
 
 			var sections []string
@@ -621,7 +621,7 @@ func TestRelicUpdateEditsPartByPart(t *testing.T) {
 func TestRelicUpdateTextOutput(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 	notes := writeRelicBodyFile(t, "notes.md", "# Notes\n")
 	code, stdout, stderr := run(t, repository, "relic", "update", id, "--title", "Archive plan, revised",
 		"--add-part", "--part-type", "note", "--body-file", notes, "--add-part", "--part-type", "decision", "--no-sync")
@@ -629,7 +629,7 @@ func TestRelicUpdateTextOutput(t *testing.T) {
 		t.Fatalf("relic update = (%d, %q, %q)", code, stdout, stderr)
 	}
 	const ulid = `[0-7][0-9A-HJKMNP-TV-Z]{25}`
-	want := regexp.MustCompile(`^` + regexp.QuoteMeta(id) + "\tspec\tArchive plan, revised\n" +
+	want := regexp.MustCompile(`^` + regexp.QuoteMeta(id) + "\tpaper\tArchive plan, revised\n" +
 		"part\t(" + ulid + ")\tnote\t(" + ulid + ")\n" +
 		"part\t" + ulid + "\tdecision\t-\n$")
 	match := want.FindStringSubmatch(stdout)
@@ -641,7 +641,7 @@ func TestRelicUpdateTextOutput(t *testing.T) {
 func TestRelicBodyEditNeedsTheCurrentVersion(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 	first := writeRelicBodyFile(t, "first.md", "the first text\n")
 	second := writeRelicBodyFile(t, "second.md", "the second text\n")
 	third := writeRelicBodyFile(t, "third.md", "the third text\n")
@@ -708,7 +708,7 @@ func TestRelicBodyEditNeedsTheCurrentVersion(t *testing.T) {
 func TestRelicUpdateReordersParts(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 	parts := addRelicParts(t, repository, id, "section", "section", "section")
 	a, b, c := parts[0], parts[1], parts[2]
 
@@ -756,7 +756,7 @@ func TestRelicUpdateReordersParts(t *testing.T) {
 func TestRelicUpdateRemoveAndRestorePart(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 	notes := writeRelicBodyFile(t, "notes.md", "# Notes\n")
 	kept := addRelicParts(t, repository, id, "section")[0]
 	part := mustUpdateRelic(t, repository, id, "--add-part", "--part-type", "note", "--field", "heading=Gone", "--body-file", notes).Parts[0].ID
@@ -812,7 +812,7 @@ func TestRelicUpdateRemoveAndRestorePart(t *testing.T) {
 func TestRelicUpdateSeveralChangesAreOneCommit(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 	part := addRelicParts(t, repository, id, "section")[0]
 	notes := writeRelicBodyFile(t, "notes.md", "# Notes\n")
 	before, head := relicCommitCount(t, repository, id), relicHeadOf(t, repository, id)
@@ -856,7 +856,7 @@ func TestRelicUpdateSeveralChangesAreOneCommit(t *testing.T) {
 func TestRelicUpdateThatChangesNothing(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 	part := addRelicParts(t, repository, id, "section")[0]
 	args := []string{"--title", "Archive plan", "--set", "status=approved", "--part", part, "--field", "heading=Goals"}
 	if first := mustUpdateRelic(t, repository, id, args...); !first.Changed {
@@ -880,7 +880,7 @@ func TestRelicUpdateThatChangesNothing(t *testing.T) {
 func TestRelicUpdateRefusesADeletedRelic(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 	mustRelic(t, repository, nil, "delete", id)
 	head := relicHeadOf(t, repository, id)
 
@@ -920,7 +920,7 @@ func TestRelicUpdateRefusesANewerWritersRelic(t *testing.T) {
 func TestRelicUpdateRefusesANameGivenTwice(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 	part := addRelicParts(t, repository, id, "section")[0]
 	head := relicHeadOf(t, repository, id)
 
@@ -959,8 +959,8 @@ func TestRelicUpdateRefusesANameGivenTwice(t *testing.T) {
 func TestRelicUpdatePartAddress(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
-	other := mustCreateRelic(t, repository, "Another", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
+	other := mustCreateRelic(t, repository, "Another", "--type", "paper").Relic.ID
 	part := addRelicParts(t, repository, id, "section")[0]
 
 	// The relic side may be written any way that finds the same relic.
@@ -989,7 +989,7 @@ func TestRelicUpdatePartAddress(t *testing.T) {
 func TestRelicUpdateBodyFiles(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 	directory := t.TempDir()
 	write := func(name string, content []byte) string {
 		path := filepath.Join(directory, name)
@@ -1062,7 +1062,7 @@ func TestRelicUpdateBodyFiles(t *testing.T) {
 func TestRelicBodySaveKeepsItsFormatLabel(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 	directory := t.TempDir()
 	write := func(name, content string) string {
 		path := filepath.Join(directory, name)
@@ -1143,7 +1143,7 @@ func TestRelicBodySaveKeepsItsFormatLabel(t *testing.T) {
 func TestRelicUpdateRefusesBadInvocations(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 	part := addRelicParts(t, repository, id, "section")[0]
 	head := relicHeadOf(t, repository, id)
 
@@ -1243,7 +1243,7 @@ func TestConcurrentRelicUpdatesLeaveAValidHistory(t *testing.T) {
 	t.Parallel()
 	binary := buildWorkbookBinary(t)
 	repository := initializedRepository(t)
-	id := mustCreateRelic(t, repository, "Contested by processes", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Contested by processes", "--type", "paper").Relic.ID
 
 	const writers = 8
 	outcomes := runConcurrently(t, writers, func(index int) (int, string, string) {
@@ -1297,7 +1297,7 @@ func relicNestedJSON(depth int) string {
 func TestRelicValuesNestAtMost32Levels(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	created := mustCreateRelic(t, repository, "Nesting", "--type", "spec")
+	created := mustCreateRelic(t, repository, "Nesting", "--type", "paper")
 	id := created.Relic.ID
 	added := mustUpdateRelic(t, repository, id, "--add-part", "--part-type", "note")
 	part := added.Parts[0].ID
@@ -1345,7 +1345,7 @@ func TestRelicValuesNestAtMost32Levels(t *testing.T) {
 func TestRelicNamesAreAtMost100Bytes(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	created := mustCreateRelic(t, repository, "Names", "--type", "spec")
+	created := mustCreateRelic(t, repository, "Names", "--type", "paper")
 	id := created.Relic.ID
 	added := mustUpdateRelic(t, repository, id, "--add-part", "--part-type", "note")
 	part := added.Parts[0].ID

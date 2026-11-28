@@ -53,7 +53,7 @@ func TestRelicShowReturnsFieldsAndBodiesOnRequest(t *testing.T) {
 	service := relicServiceFor(repo, config, 100000)
 	created, err := service.Create(ctx, core.RelicCreateInput{
 		Title: "Task archive compaction",
-		Type:  "spec",
+		Type:  "paper",
 		Parts: []core.RelicPartInput{
 			{
 				Type:   "section",
@@ -80,7 +80,7 @@ func TestRelicShowReturnsFieldsAndBodiesOnRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Show: %v", err)
 	}
-	if plain.ID != relicID || plain.Title != "Task archive compaction" || plain.Type != "spec" ||
+	if plain.ID != relicID || plain.Title != "Task archive compaction" || plain.Type != "paper" ||
 		plain.Author != relicTestActor || plain.Head == "" || plain.CreatedAt == nil || plain.UpdatedAt == nil {
 		t.Errorf("show header = %+v", plain)
 	}
@@ -153,7 +153,7 @@ func TestRelicExportRoundTripsEmptyAndBinaryBodies(t *testing.T) {
 		binary := []byte{0xff, 0xfe, 0x00}
 		created, err := service.Create(ctx, core.RelicCreateInput{
 			Title: "Task archive compaction",
-			Type:  "spec",
+			Type:  "paper",
 			Properties: map[string]json.RawMessage{
 				"summary": relicJSONString(t, "a <b> & c"),
 				"count":   json.RawMessage(`1.0`),
@@ -281,7 +281,7 @@ func TestRelicRemoveAndRestorePart(t *testing.T) {
 	service := relicServiceFor(repo, config, 100000)
 	created, err := service.Create(ctx, core.RelicCreateInput{
 		Title: "Task archive compaction",
-		Type:  "spec",
+		Type:  "paper",
 		Parts: []core.RelicPartInput{
 			{
 				Type:   "section",
@@ -362,7 +362,7 @@ func TestRelicDeleteAndRestore(t *testing.T) {
 		service := relicServiceFor(repo, config, 100000)
 		created, err := service.Create(ctx, core.RelicCreateInput{
 			Title:      "Task archive compaction",
-			Type:       "spec",
+			Type:       "paper",
 			Properties: map[string]json.RawMessage{"status": relicJSONString(t, "draft")},
 			Parts: []core.RelicPartInput{
 				{
@@ -551,7 +551,7 @@ func TestRelicManyPartLifecycle(t *testing.T) {
 		service := relicServiceFor(repo, config, 100000)
 		const partCount = 200
 
-		input := core.RelicCreateInput{Title: "A long plan", Type: "plan"}
+		input := core.RelicCreateInput{Title: "A long plan", Type: "agenda"}
 		model := make([]*relicModelPart, partCount)
 		for index := range model {
 			part := &relicModelPart{

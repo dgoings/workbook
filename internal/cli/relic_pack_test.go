@@ -46,7 +46,7 @@ func TestASyncThatBringsRelicsPacksThem(t *testing.T) {
 	binary := buildWorkbookBinary(t)
 	first, second := cliSyncRepositories(t)
 	for _, title := range []string{"One", "Two", "Three", "Four"} {
-		mustCreateRelic(t, first, title, "--type", "spec")
+		mustCreateRelic(t, first, title, "--type", "paper")
 	}
 	cliGit(t, second, "branch", "stays-loose")
 
@@ -78,8 +78,8 @@ func TestTaskCommandsAndRelicReadsRunNoPack(t *testing.T) {
 	t.Parallel()
 	binary := buildWorkbookBinary(t)
 	first, second := cliSyncRepositories(t)
-	mustCreateRelic(t, first, "On origin", "--type", "spec")
-	relicID := mustCreateRelic(t, second, "Here", "--type", "spec", "--no-sync").Relic.ID
+	mustCreateRelic(t, first, "On origin", "--type", "paper")
+	relicID := mustCreateRelic(t, second, "Here", "--type", "paper", "--no-sync").Relic.ID
 	task := cliCreateTask(t, second, "A task")
 	for _, args := range [][]string{
 		{"create", "Traced", "--json"},
@@ -119,7 +119,7 @@ func TestARefusedOrFailedPackLeavesTheCommandAsItWas(t *testing.T) {
 			t.Parallel()
 			first, second := cliSyncRepositories(t)
 			for _, title := range []string{"One", "Two", "Three"} {
-				mustCreateRelic(t, first, title, "--type", "spec")
+				mustCreateRelic(t, first, title, "--type", "paper")
 			}
 			third := filepath.Join(t.TempDir(), "clone")
 			if err := os.MkdirAll(third, 0o755); err != nil {

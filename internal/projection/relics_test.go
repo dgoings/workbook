@@ -109,8 +109,15 @@ func relicIndexJSON(t *testing.T, value any) json.RawMessage {
 // field of its own and every third without a body.
 func createIndexRelic(t *testing.T, service core.RelicService, title string, parts int) string {
 	t.Helper()
+	return createIndexRelicOfType(t, service, "paper", title, parts)
+}
+
+// createIndexRelicOfType is createIndexRelic for a test that saves its own
+// schema for the type, so an open relic of it counts as behind.
+func createIndexRelicOfType(t *testing.T, service core.RelicService, relicType, title string, parts int) string {
+	t.Helper()
 	input := core.RelicCreateInput{
-		Title: title, Type: "spec",
+		Title: title, Type: relicType,
 		Properties: map[string]json.RawMessage{"owner": relicIndexJSON(t, title), "meta": json.RawMessage(`{"z":[1,{"a":null}]}`)},
 	}
 	for index := range parts {
@@ -1047,7 +1054,7 @@ func TestRelicIndexHoldsNoBodyText(t *testing.T) {
 	marker := hex.EncodeToString(random)
 	service := relicServiceForIndex(repository, config, 1000)
 	if _, err := service.Create(ctx, core.RelicCreateInput{
-		Title: "Secret", Type: "spec",
+		Title: "Secret", Type: "paper",
 		Parts: []core.RelicPartInput{
 			{Type: "section", Body: &core.RelicBodyInput{Format: "md", Content: []byte("before " + marker + " after\n")}},
 			{Type: "section", Body: &core.RelicBodyInput{Format: "txt", Content: []byte(marker)}},
@@ -1222,7 +1229,7 @@ func compactionIndexFixture(t *testing.T, repository *gitstore.Repository, confi
 	task := linkIndexTask(t, repository, config, 9)
 	linkRelic(t, service, retired,
 		core.RelicEdit{Kind: core.RelicEditAddLink, Target: task, Rel: "relates-to"},
-		core.RelicEdit{Kind: core.RelicEditAddLink, Target: task, From: relicPartIDOf(t, repository, config, retired, 1), Rel: "decided-by"})
+		core.RelicEdit{Kind: core.RelicEditAddLink, Target: task, From: relicPartIDOf(t, repository, config, retired, 1), Rel: "decided-in"})
 	linkRelic(t, service, retired, core.RelicEdit{Kind: core.RelicEditRemovePart, Part: relicPartIDOf(t, repository, config, retired, 1)})
 	linkRelic(t, service, retired, core.RelicEdit{Kind: core.RelicEditSetProperty, Name: "outcome", Value: relicIndexJSON(t, "kept")})
 	changeIndexRelic(t, repository, config, retired, core.RelicOperation{ID: relicIndexTestID(60001), Type: core.RelicOperationRetire})

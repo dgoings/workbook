@@ -51,7 +51,7 @@ func historyRelic(t *testing.T, service core.RelicService) (relicID string, part
 	t.Helper()
 	ctx := context.Background()
 	created, err := service.Create(ctx, core.RelicCreateInput{
-		Title: "History", Type: "spec",
+		Title: "History", Type: "paper",
 		Parts: []core.RelicPartInput{
 			{Type: "section", Body: &core.RelicBodyInput{Format: "md", Content: []byte("one\ntwo\n")}},
 			{Type: "section", Body: &core.RelicBodyInput{Format: "md", Content: []byte("second\n")}},
@@ -295,7 +295,7 @@ func TestRelicDiffServiceReadsOnlyChangedParts(t *testing.T) {
 	repo, config := relicRepository(t, testrepo.FormatSHA1)
 	ctx := context.Background()
 	service := relicServiceFor(repo, config, 100000)
-	input := core.RelicCreateInput{Title: "Large", Type: "spec"}
+	input := core.RelicCreateInput{Title: "Large", Type: "paper"}
 	for index := range 200 {
 		input.Parts = append(input.Parts, core.RelicPartInput{
 			Type:   "section",
@@ -399,7 +399,7 @@ func TestRelicDiffServicePoints(t *testing.T) {
 	}
 
 	// A relic of one commit is compared with the side before it.
-	single, err := service.Create(ctx, core.RelicCreateInput{Title: "Single", Type: "spec"})
+	single, err := service.Create(ctx, core.RelicCreateInput{Title: "Single", Type: "paper"})
 	if err != nil {
 		t.Fatal(err)
 	}

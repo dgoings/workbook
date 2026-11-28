@@ -50,7 +50,7 @@ func TestAFailedRelicPushDoesNotHideATaskRejection(t *testing.T) {
 	if code, stdout, stderr := run(t, second, "update", task.ID, "--title", "Renamed here", "--no-sync"); code != 0 {
 		t.Fatalf("update = (%d, %q, %q)", code, stdout, stderr)
 	}
-	mustCreateRelic(t, second, "Waiting here", "--type", "spec", "--no-sync")
+	mustCreateRelic(t, second, "Waiting here", "--type", "paper", "--no-sync")
 	path := "PATH=" + relicPushFailingGit(t) + string(os.PathListSeparator) + os.Getenv("PATH")
 
 	push := func(args ...string) (int, string, string) {
@@ -137,7 +137,7 @@ func TestAFailedRelicPushKeepsItsReasonBesideCorruptTaskData(t *testing.T) {
 	cliCreateTask(t, second, "Goes out")
 	cliGit(t, second, "update-ref", "refs/workbook/tasks/"+broken.ID,
 		cliGitOutput(t, second, "commit-tree", "-m", "not a task", cliGitOutput(t, second, "hash-object", "-t", "tree", "-w", "/dev/null")))
-	mustCreateRelic(t, second, "Waiting here", "--type", "spec", "--no-sync")
+	mustCreateRelic(t, second, "Waiting here", "--type", "paper", "--no-sync")
 	path := "PATH=" + relicPushFailingGit(t) + string(os.PathListSeparator) + os.Getenv("PATH")
 
 	for _, args := range [][]string{{"push", "--json"}, {"push"}} {

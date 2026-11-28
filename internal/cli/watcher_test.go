@@ -185,7 +185,7 @@ func TestSyncWatchObservesAnotherClonePushWithNoLocalCommand(t *testing.T) {
 func TestSyncWatchSharesARelicWithNoLocalCommand(t *testing.T) {
 	t.Parallel()
 	first, second := cliSyncRepositories(t)
-	relicID := mustCreateRelic(t, first, "Watched relic", "--type", "spec").Relic.ID
+	relicID := mustCreateRelic(t, first, "Watched relic", "--type", "paper").Relic.ID
 	published := originRelicHead(t, first, relicID)
 	if published == "" {
 		t.Fatalf("relic create did not publish %s", relicID)
@@ -209,7 +209,7 @@ func TestSyncWatchSharesARelicWithNoLocalCommand(t *testing.T) {
 func TestRelicMutationDefersToALiveWatcher(t *testing.T) {
 	t.Parallel()
 	_, second := cliSyncRepositories(t)
-	relicID := mustCreateRelic(t, second, "Deferred relic", "--type", "spec").Relic.ID
+	relicID := mustCreateRelic(t, second, "Deferred relic", "--type", "paper").Relic.ID
 	startCLIWatcher(t, second, "1h")
 
 	envelope := runRelicJSON(t, second, 0, "update", relicID, "--title", "Renamed while watched")

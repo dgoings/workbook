@@ -109,11 +109,11 @@ func TestRelicRetireAndUnretire(t *testing.T) {
 		t.Run(objectFormat, func(t *testing.T) {
 			t.Parallel()
 			repository := relicRepositoryFor(t, objectFormat)
-			id := mustCreateRelic(t, repository, "Old plan", "--type", "plan").Relic.ID
-			kept := mustCreateRelic(t, repository, "Current plan", "--type", "plan").Relic.ID
+			id := mustCreateRelic(t, repository, "Old plan", "--type", "agenda").Relic.ID
+			kept := mustCreateRelic(t, repository, "Current plan", "--type", "agenda").Relic.ID
 			ref := "refs/workbook/relics/" + id
 
-			if got, want := mustRun(t, repository, "relic", "retire", id, "--no-sync"), id+"\tplan\tOld plan\n"; got != want {
+			if got, want := mustRun(t, repository, "relic", "retire", id, "--no-sync"), id+"\tagenda\tOld plan\n"; got != want {
 				t.Fatalf("relic retire = %q, want %q", got, want)
 			}
 			if subject := gitOutput(t, repository, "log", "-1", "--format=%s", ref); !strings.Contains(subject, "retire relic "+id) {
@@ -136,7 +136,7 @@ func TestRelicRetireAndUnretire(t *testing.T) {
 					t.Fatalf("relic list %s = %s", option, mustJSON(t, listed))
 				}
 				text := mustRun(t, repository, "relic", "list", option)
-				if want := id + "\tplan\t0 parts\tOld plan\tretired\n" + kept + "\tplan\t0 parts\tCurrent plan\n"; text != want {
+				if want := id + "\tagenda\t0 parts\tOld plan\tretired\n" + kept + "\tagenda\t0 parts\tCurrent plan\n"; text != want {
 					t.Fatalf("relic list %s = %q, want %q", option, text, want)
 				}
 			}
@@ -180,11 +180,11 @@ func TestRetiredRelicCanStillBeEdited(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
 	task := cliCreateTask(t, repository, "Implement compaction")
-	relicID := mustCreateRelic(t, repository, "Plan", "--type", "spec", "--no-sync").Relic.ID
+	relicID := mustCreateRelic(t, repository, "Plan", "--type", "paper", "--no-sync").Relic.ID
 	mustRelic(t, repository, nil, "retire", relicID)
 	mustUpdateRelic(t, repository, relicID, "--title", "Plan, revised", "--add-part", "--part-type", "section")
 	mustUpdateRelic(t, repository, relicID, "--link", task.ID, "--rel", "relates-to")
-	mustPutSchema(t, repository, "spec", `{}`)
+	mustPutSchema(t, repository, "paper", `{}`)
 	var migrated core.RelicMutationResult
 	mustRelic(t, repository, &migrated, "migrate", relicID, "--to", "1")
 	if !migrated.Changed || !migrated.Relic.Retired {
@@ -207,7 +207,7 @@ func TestRetiredRelicCanStillBeEdited(t *testing.T) {
 func TestRetireRefusesDeletedRelic(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	relicID := mustCreateRelic(t, repository, "Plan", "--type", "spec").Relic.ID
+	relicID := mustCreateRelic(t, repository, "Plan", "--type", "paper").Relic.ID
 	mustRelic(t, repository, nil, "delete", relicID)
 	head := gitOutput(t, repository, "rev-parse", "refs/workbook/relics/"+relicID)
 	for _, verb := range []string{"retire", "unretire"} {
@@ -224,9 +224,9 @@ func TestRetireRefusesDeletedRelic(t *testing.T) {
 func TestListBehindLeavesOutRetired(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	old := mustCreateRelic(t, repository, "Old", "--type", "spec").Relic.ID
-	current := mustCreateRelic(t, repository, "Current", "--type", "spec").Relic.ID
-	mustPutSchema(t, repository, "spec", ownerSchemaOne)
+	old := mustCreateRelic(t, repository, "Old", "--type", "paper").Relic.ID
+	current := mustCreateRelic(t, repository, "Current", "--type", "paper").Relic.ID
+	mustPutSchema(t, repository, "paper", ownerSchemaOne)
 	mustRelic(t, repository, nil, "retire", old)
 
 	if got := listedIDs(relicListOf(t, repository, "--behind")); !slices.Equal(got, []string{current}) {
@@ -245,7 +245,7 @@ func TestShowTaskMarksRetiredRelic(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
 	task := cliCreateTask(t, repository, "Implement compaction")
-	relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "spec", "--no-sync").Relic.ID
+	relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "paper", "--no-sync").Relic.ID
 	partID := addRelicParts(t, repository, relicID, "section")[0]
 	mustUpdateRelic(t, repository, relicID, "--link", task.ID, "--from", partID, "--rel", "implemented-by")
 	linkID := shownRelic(t, repository, relicID).Links[0].ID
@@ -300,7 +300,7 @@ func TestShowRelicsMarks(t *testing.T) {
 // part and its stub.
 func compactedRetiredRelic(t *testing.T, repository string) (relicID, live, stub string) {
 	t.Helper()
-	relicID = mustCreateRelic(t, repository, "Archive plan", "--type", "spec", "--no-sync").Relic.ID
+	relicID = mustCreateRelic(t, repository, "Archive plan", "--type", "paper", "--no-sync").Relic.ID
 	parts := addRelicParts(t, repository, relicID, "section", "note")
 	live, stub = parts[0], parts[1]
 	mustUpdateRelic(t, repository, relicID, "--part", stub, "--field", "owner=ana",
@@ -319,7 +319,7 @@ func TestStubRefusals(t *testing.T) {
 			repository := relicRepositoryFor(t, objectFormat)
 			task := cliCreateTask(t, repository, "Implement compaction")
 			relicID, live, stub := compactedRetiredRelic(t, repository)
-			other := mustCreateRelic(t, repository, "Other", "--type", "spec", "--no-sync").Relic.ID
+			other := mustCreateRelic(t, repository, "Other", "--type", "paper", "--no-sync").Relic.ID
 
 			shown := shownRelic(t, repository, relicID, "--removed")
 			if shown.Compacted == nil || shown.Compacted.Boundary != core.RelicBoundaryRetired ||
@@ -385,11 +385,11 @@ func TestRestoreCompactedDeletedRelicWarns(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
 	task := cliCreateTask(t, repository, "Implement compaction")
-	relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "spec", "--no-sync").Relic.ID
+	relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "paper", "--no-sync").Relic.ID
 	parts := addRelicParts(t, repository, relicID, "section", "note")
 	mustUpdateRelic(t, repository, relicID, "--set", "outcome=kept",
 		"--link", task.ID, "--rel", "relates-to", "--link", task.ID, "--from", parts[0], "--rel", "implemented-by")
-	other := mustCreateRelic(t, repository, "Rollout", "--type", "plan", "--no-sync").Relic.ID
+	other := mustCreateRelic(t, repository, "Rollout", "--type", "agenda", "--no-sync").Relic.ID
 	mustUpdateRelic(t, repository, other, "--link", relicID, "--rel", "relates-to", "--link", relicID+"#"+parts[1], "--rel", "relates-to")
 	links := shownRelic(t, repository, relicID).Links
 	mustRelic(t, repository, nil, "delete", relicID)
@@ -479,11 +479,11 @@ func TestRestoreCompactedDeletedRelicWarns(t *testing.T) {
 func TestRestoreCompactedDeletedRelicWarnsInText(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "spec", "--no-sync").Relic.ID
+	relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "paper", "--no-sync").Relic.ID
 	mustRelic(t, repository, nil, "delete", relicID)
 	compactRelicsForTest(t, repository)
 	code, stdout, stderr := run(t, repository, "relic", "restore", relicID, "--no-sync")
-	if code != 0 || !strings.HasPrefix(stdout, relicID+"\tspec\tArchive plan\n") ||
+	if code != 0 || !strings.HasPrefix(stdout, relicID+"\tpaper\tArchive plan\n") ||
 		!strings.Contains(stderr, "only its title, type, author, dates and links remain") {
 		t.Fatalf("relic restore = (%d, %q, %q)", code, stdout, stderr)
 	}

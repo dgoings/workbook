@@ -577,7 +577,7 @@ func otherProject(t *testing.T, project tasksRemoteProject, key string) []string
 	}
 	refs := []string{
 		"refs/workbook/tasks/" + cliCreateTask(t, other, "Another project's task").ID,
-		relicRef(mustCreateRelic(t, other, "Another project's relic", "--type", "spec").Relic.ID),
+		relicRef(mustCreateRelic(t, other, "Another project's relic", "--type", "paper").Relic.ID),
 	}
 	for _, ref := range refs {
 		cliGit(t, other, "push", "--quiet", "--no-verify", project.code, ref+":"+ref)
@@ -711,7 +711,7 @@ func TestMoveTasksCarriesTasksAndRelicsUnderARetiredKey(t *testing.T) {
 	t.Parallel()
 	project := codeProject(t, testrepo.FormatSHA1)
 	old, _, _ := strings.Cut(project.ids[0], "-")
-	relics := []string{mustCreateRelic(t, project.seed, "Under the old key", "--type", "spec").Relic.ID}
+	relics := []string{mustCreateRelic(t, project.seed, "Under the old key", "--type", "paper").Relic.ID}
 	for _, args := range [][]string{{"key", "add", "NEW", "--current"}, {"key", "retire", old}} {
 		mustRunKey(t, project.seed, args...)
 	}
@@ -719,7 +719,7 @@ func TestMoveTasksCarriesTasksAndRelicsUnderARetiredKey(t *testing.T) {
 		t.Fatalf("keys = %v, want %v", got, want)
 	}
 	ids := append(append([]string(nil), project.ids...), cliCreateTask(t, project.seed, "Under the new key").ID)
-	relics = append(relics, mustCreateRelic(t, project.seed, "Under the new key", "--type", "spec").Relic.ID)
+	relics = append(relics, mustCreateRelic(t, project.seed, "Under the new key", "--type", "paper").Relic.ID)
 	if !strings.HasPrefix(ids[len(ids)-1], "NEW-") || !strings.HasPrefix(relics[0], old+"-R-") || !strings.HasPrefix(relics[1], "NEW-R-") {
 		t.Fatalf("tasks %v and relics %v, want the last of each under NEW and the first relic under %s", ids, relics, old)
 	}

@@ -15,9 +15,9 @@ const (
 	ownerSchemaTwo = `{"properties":{"type":"object","required":["owner"],"properties":{"owner":{"type":"string"}}}}`
 )
 
-func ownedSpecFile(t *testing.T) string {
+func ownedRelicFile(t *testing.T, relicType string) string {
 	t.Helper()
-	return writeRelicDocumentFile(t, []byte(`{"format":"workbook.relic","version":1,"title":"Owned","type":"spec",`+
+	return writeRelicDocumentFile(t, []byte(`{"format":"workbook.relic","version":1,"title":"Owned","type":"`+relicType+`",`+
 		`"properties":{"owner":"ana"}}`))
 }
 
@@ -50,7 +50,7 @@ func TestMigrateAndClearMeetingFlagTheRelic(t *testing.T) {
 	t.Parallel()
 	first, second := schemaSharedClones(t)
 	mustPutSchema(t, first, "spec", ownerSchemaOne)
-	relicID := mustCreateRelic(t, first, "--from-file", ownedSpecFile(t)).Relic.ID
+	relicID := mustCreateRelic(t, first, "--from-file", ownedRelicFile(t, "spec")).Relic.ID
 	mustPutSchema(t, first, "spec", ownerSchemaTwo)
 	syncedClone(t, second)
 
@@ -85,7 +85,7 @@ func TestRelicNamingAnUnknownVersionSyncsAndReads(t *testing.T) {
 	first, second := schemaSharedClones(t)
 	before := gitOutput(t, second, "rev-parse", "refs/workbook/config")
 	mustPutSchema(t, first, "spec", ownerSchemaTwo)
-	relicID := mustCreateRelic(t, first, "--from-file", ownedSpecFile(t)).Relic.ID
+	relicID := mustCreateRelic(t, first, "--from-file", ownedRelicFile(t, "spec")).Relic.ID
 	syncedClone(t, second)
 	gitOutput(t, second, "update-ref", "refs/workbook/config", before)
 
@@ -116,21 +116,21 @@ func TestRelicNamingAnUnknownVersionSyncsAndReads(t *testing.T) {
 func TestRelicListBehind(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	none := mustCreateRelic(t, repository, "Before any schema", "--type", "spec").Relic.ID
-	planBefore := mustCreateRelic(t, repository, "Plan before its schema", "--type", "plan").Relic.ID
-	mustPutSchema(t, repository, "spec", ownerSchemaOne)
-	onOne := mustCreateRelic(t, repository, "On one", "--type", "spec").Relic.ID
-	mustPutSchema(t, repository, "spec", ownerSchemaTwo)
-	newest := mustCreateRelic(t, repository, "--from-file", ownedSpecFile(t)).Relic.ID
-	mustPutSchema(t, repository, "plan", `{}`)
-	planNewest := mustCreateRelic(t, repository, "Plan", "--type", "plan").Relic.ID
+	none := mustCreateRelic(t, repository, "Before any schema", "--type", "paper").Relic.ID
+	agendaBefore := mustCreateRelic(t, repository, "Agenda before its schema", "--type", "agenda").Relic.ID
+	mustPutSchema(t, repository, "paper", ownerSchemaOne)
+	onOne := mustCreateRelic(t, repository, "On one", "--type", "paper").Relic.ID
+	mustPutSchema(t, repository, "paper", ownerSchemaTwo)
+	newest := mustCreateRelic(t, repository, "--from-file", ownedRelicFile(t, "paper")).Relic.ID
+	mustPutSchema(t, repository, "agenda", `{}`)
+	agendaNewest := mustCreateRelic(t, repository, "Agenda", "--type", "agenda").Relic.ID
 	mustCreateRelic(t, repository, "Open", "--type", "note")
 
-	if got, want := listedIDs(relicListOf(t, repository, "--behind")), []string{none, planBefore, onOne}; mustJSON(t, got) != mustJSON(t, want) {
+	if got, want := listedIDs(relicListOf(t, repository, "--behind")), []string{none, agendaBefore, onOne}; mustJSON(t, got) != mustJSON(t, want) {
 		t.Fatalf("--behind = %v, want %v", got, want)
 	}
-	if got := listedIDs(relicListOf(t, repository, "--behind", "--type", "plan")); mustJSON(t, got) != mustJSON(t, []string{planBefore}) {
-		t.Fatalf("--behind --type plan = %v, want %s", got, planBefore)
+	if got := listedIDs(relicListOf(t, repository, "--behind", "--type", "agenda")); mustJSON(t, got) != mustJSON(t, []string{agendaBefore}) {
+		t.Fatalf("--behind --type agenda = %v, want %s", got, agendaBefore)
 	}
 	code, stdout, stderr := run(t, repository, "relic", "list", "--behind", "--json")
 	if code != 0 || strings.Count(stdout, `"behind":true`) != 3 {
@@ -141,22 +141,22 @@ func TestRelicListBehind(t *testing.T) {
 	}
 
 	mustRelic(t, repository, nil, "delete", onOne)
-	if got := listedIDs(relicListOf(t, repository, "--behind")); mustJSON(t, got) != mustJSON(t, []string{none, planBefore}) {
+	if got := listedIDs(relicListOf(t, repository, "--behind")); mustJSON(t, got) != mustJSON(t, []string{none, agendaBefore}) {
 		t.Fatalf("--behind after a delete = %v", got)
 	}
-	if got := listedIDs(relicListOf(t, repository, "--behind", "--all")); mustJSON(t, got) != mustJSON(t, []string{none, planBefore, onOne}) {
+	if got := listedIDs(relicListOf(t, repository, "--behind", "--all")); mustJSON(t, got) != mustJSON(t, []string{none, agendaBefore, onOne}) {
 		t.Fatalf("--behind --all = %v", got)
 	}
 
 	// --linked-to combines with --behind, and numbers each schema version.
 	task := decodeMutationTask(t, mustRun(t, repository, "create", "Linked", "--json"), "create")
-	for _, relicID := range []string{none, newest, planNewest} {
+	for _, relicID := range []string{none, newest, agendaNewest} {
 		mustRelic(t, repository, nil, "update", relicID, "--link", task.ID, "--rel", "relates-to")
 	}
 	linked := linkedToTask(t, repository, task.ID)
 	if len(linked) != 3 || linked[1].ID != newest || linked[1].Schema == nil || linked[1].Schema.Version != 2 ||
 		linked[1].RelicConformance == nil || linked[1].State != core.RelicConformanceConforms {
-		t.Fatalf("--linked-to = %s, want the newest spec relic numbered 2 and conforming", mustJSON(t, linked))
+		t.Fatalf("--linked-to = %s, want the newest paper relic numbered 2 and conforming", mustJSON(t, linked))
 	}
 	if got := listedIDs(linkedToTask(t, repository, task.ID, "--behind")); mustJSON(t, got) != mustJSON(t, []string{none}) {
 		t.Fatalf("--linked-to --behind = %v, want %s", got, none)
@@ -168,9 +168,9 @@ func TestRelicListBehind(t *testing.T) {
 func TestConformanceSurvivesDeletingTheIndexFile(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	mustCreateRelic(t, repository, "Before any schema", "--type", "spec")
-	mustPutSchema(t, repository, "spec", ownerSchemaTwo)
-	mustCreateRelic(t, repository, "--from-file", ownedSpecFile(t))
+	mustCreateRelic(t, repository, "Before any schema", "--type", "paper")
+	mustPutSchema(t, repository, "paper", ownerSchemaTwo)
+	mustCreateRelic(t, repository, "--from-file", ownedRelicFile(t, "paper"))
 	mustCreateRelic(t, repository, "Open", "--type", "note")
 	want := mustRun(t, repository, "relic", "list", "--all", "--json")
 	if !strings.Contains(want, `"conformance":"conforms"`) || !strings.Contains(want, `"conformance":"open"`) {

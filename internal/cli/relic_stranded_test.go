@@ -23,7 +23,7 @@ func TestRelicPublishedAroundTheMarkIsReportedAsARelic(t *testing.T) {
 	if code, stdout, stderr := run(t, teammate, "setup"); code != 0 {
 		t.Fatalf("teammate setup = (%d, %q, %q)", code, stdout, stderr)
 	}
-	relicID := mustCreateRelic(t, teammate, "Moving plan", "--type", "plan").Relic.ID
+	relicID := mustCreateRelic(t, teammate, "Moving plan", "--type", "agenda").Relic.ID
 	held, release := holdPushesTo(t, project.code, "refs/workbook/relics/*")
 
 	type outcome struct {
@@ -72,7 +72,7 @@ func TestRelicPublicationThatCannotBeCheckedAfterwardsNamesTheRelic(t *testing.T
 	if code, stdout, stderr := run(t, clone, "setup"); code != 0 {
 		t.Fatalf("setup = (%d, %q, %q)", code, stdout, stderr)
 	}
-	relicID := mustCreateRelic(t, clone, "Accepted plan", "--type", "plan").Relic.ID
+	relicID := mustCreateRelic(t, clone, "Accepted plan", "--type", "agenda").Relic.ID
 	bare := strings.TrimSpace(cliGitOutput(t, clone, "remote", "get-url", "origin"))
 	gone := bare + ".gone"
 	hook := "#!/bin/sh\nmoved=no\nwhile read old new ref; do\n" +

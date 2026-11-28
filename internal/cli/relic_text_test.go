@@ -34,7 +34,7 @@ func TestRelicCreateFromFileRefusesTextThatIsNotUTF8(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
 
-	latin1 := []byte("{\"format\":\"workbook.relic\",\"version\":1,\"title\":\"Caf\xe9\",\"type\":\"spec\"," +
+	latin1 := []byte("{\"format\":\"workbook.relic\",\"version\":1,\"title\":\"Caf\xe9\",\"type\":\"paper\"," +
 		"\"properties\":{\"owner\":\"Ren\xe9e\"},\"parts\":[{\"type\":\"section\",\"fields\":{\"heading\":\"R\xe9sum\xe9\"}," +
 		"\"body\":{\"format\":\"txt\",\"text\":\"na\xefve caf\xe9\\n\"}}]}")
 	message := refusedRelicText(t, repository, "create", "--from-file", writeRelicDocumentFile(t, latin1))
@@ -45,7 +45,7 @@ func TestRelicCreateFromFileRefusesTextThatIsNotUTF8(t *testing.T) {
 	// The same document with only its body in Latin-1 is told where a body
 	// that is not text goes.
 	body := []byte("na\xefve caf\xe9\n")
-	onlyBody := []byte("{\"format\":\"workbook.relic\",\"version\":1,\"title\":\"Cafe\",\"type\":\"spec\"," +
+	onlyBody := []byte("{\"format\":\"workbook.relic\",\"version\":1,\"title\":\"Cafe\",\"type\":\"paper\"," +
 		"\"parts\":[{\"type\":\"section\",\"fields\":{},\"body\":{\"format\":\"txt\",\"text\":\"na\xefve caf\xe9\\n\"}}]}")
 	message = refusedRelicText(t, repository, "create", "--from-file", writeRelicDocumentFile(t, onlyBody))
 	for _, want := range []string{"not valid UTF-8", "parts[0].body.text", `"base64" member`} {
@@ -54,7 +54,7 @@ func TestRelicCreateFromFileRefusesTextThatIsNotUTF8(t *testing.T) {
 		}
 	}
 
-	surrogate := []byte(`{"format":"workbook.relic","version":1,"title":"Surrogate","type":"spec","parts":[` +
+	surrogate := []byte(`{"format":"workbook.relic","version":1,"title":"Surrogate","type":"paper","parts":[` +
 		`{"type":"section","fields":{},"body":{"text":"half an emoji: ` + jsonHalfPair + `"}}]}`)
 	message = refusedRelicText(t, repository, "create", "--from-file", writeRelicDocumentFile(t, surrogate))
 	for _, want := range []string{"surrogate pair", "parts[0].body.text", `"base64" member`} {
@@ -71,7 +71,7 @@ func TestRelicCreateFromFileRefusesTextThatIsNotUTF8(t *testing.T) {
 	}
 
 	// The bytes that are no text are a body all the same, as base64.
-	asBase64 := []byte(`{"format":"workbook.relic","version":1,"title":"Cafe","type":"spec","parts":[` +
+	asBase64 := []byte(`{"format":"workbook.relic","version":1,"title":"Cafe","type":"paper","parts":[` +
 		`{"type":"section","fields":{},"body":{"format":"txt","base64":"` + base64.StdEncoding.EncodeToString(body) + `"}}]}`)
 	created := mustCreateRelic(t, repository, "--from-file", writeRelicDocumentFile(t, asBase64))
 	address := created.Relic.ID + "#" + created.Parts[0].ID
@@ -94,7 +94,7 @@ func TestRelicCreateFromFileRefusesTextThatIsNotUTF8(t *testing.T) {
 func TestRelicValueOptionsRefuseTextThatIsNotUTF8(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	created := mustCreateRelic(t, repository, "Values", "--type", "spec")
+	created := mustCreateRelic(t, repository, "Values", "--type", "paper")
 	id := created.Relic.ID
 	// What the bad byte used to be stored as, so a repeat of the old behavior
 	// would report no change.
@@ -136,7 +136,7 @@ func TestRelicRefusesAMemberNamedTwice(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
 
-	const duplicated = `{"format":"workbook.relic","version":1,"title":"Draft","type":"spec",
+	const duplicated = `{"format":"workbook.relic","version":1,"title":"Draft","type":"paper",
  "parts":[{"type":"decision","fields":{"chosen":"by hand","status":"accepted"},"body":{"format":"md","text":"Reasoning."}},
           {"type":"section","fields":{"heading":"Goals"}}],
  "Title":"Final",
@@ -167,7 +167,7 @@ func TestRelicRefusesAMemberNamedTwice(t *testing.T) {
 		t.Fatalf("a refused document wrote a relic:\n%s", refs)
 	}
 
-	created := mustCreateRelic(t, repository, "Values", "--type", "spec")
+	created := mustCreateRelic(t, repository, "Values", "--type", "paper")
 	id := created.Relic.ID
 	added := mustUpdateRelic(t, repository, id, "--add-part", "--part-type", "note")
 	part, head := added.Parts[0].ID, added.Relic.Head

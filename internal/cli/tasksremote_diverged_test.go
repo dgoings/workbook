@@ -26,7 +26,7 @@ func divergedKeyProject(t *testing.T, teammateChange []string) (tasksRemoteProje
 	var task, relic string
 	if teammateChange[0] == "key" {
 		task = cliCreateTask(t, teammate, "Created under the teammate's key").ID
-		relic = mustCreateRelic(t, teammate, "Written under the teammate's key", "--type", "spec").Relic.ID
+		relic = mustCreateRelic(t, teammate, "Written under the teammate's key", "--type", "paper").Relic.ID
 		if !strings.HasPrefix(task, "CC-") || !strings.HasPrefix(relic, "CC-R-") {
 			t.Fatalf("teammate's task %s and relic %s, want both under CC", task, relic)
 		}

@@ -27,7 +27,7 @@ func forgeOriginRelicChild(t *testing.T, repository, relicID string) string {
 func TestRelicCommandDoesNotPushARelicTheFetchWithheld(t *testing.T) {
 	t.Parallel()
 	first, second := cliSyncRepositories(t)
-	relicID := mustCreateRelic(t, first, "Withheld plan", "--type", "plan").Relic.ID
+	relicID := mustCreateRelic(t, first, "Withheld plan", "--type", "agenda").Relic.ID
 	forged := forgeOriginRelicChild(t, second, relicID)
 
 	envelope := runRelicJSON(t, first, 0, "update", relicID, "--title", "Renamed here")
@@ -67,7 +67,7 @@ func TestRelicCommandDoesNotPushARelicTheFetchWithheld(t *testing.T) {
 func TestPushSkipsARelicThatIsOnlyBehindOrigin(t *testing.T) {
 	t.Parallel()
 	first, second := cliSyncRepositories(t)
-	relicID := mustCreateRelic(t, first, "Behind plan", "--type", "plan").Relic.ID
+	relicID := mustCreateRelic(t, first, "Behind plan", "--type", "agenda").Relic.ID
 	if code, stdout, stderr := run(t, second, "fetch"); code != 0 {
 		t.Fatalf("fetch = (%d, %q, %q)", code, stdout, stderr)
 	}
@@ -95,7 +95,7 @@ func TestPushDoesNotPushARelicWhoseOriginTipFailsItsCheck(t *testing.T) {
 		t.Run(local, func(t *testing.T) {
 			t.Parallel()
 			first, second := cliSyncRepositories(t)
-			relicID := mustCreateRelic(t, first, "Forged plan", "--type", "plan").Relic.ID
+			relicID := mustCreateRelic(t, first, "Forged plan", "--type", "agenda").Relic.ID
 			forged := forgeOriginRelicChild(t, second, relicID)
 			if local == "a local change" {
 				mustUpdateRelic(t, first, relicID, "--title", "Mine", "--no-sync")

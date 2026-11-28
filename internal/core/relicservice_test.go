@@ -241,7 +241,7 @@ func requireRelicCategory(t *testing.T, label string, err error, want Category, 
 func relicCreateInputForTest() RelicCreateInput {
 	return RelicCreateInput{
 		Title: "  Task archive compaction ",
-		Type:  "spec",
+		Type:  "paper",
 		Properties: map[string]json.RawMessage{
 			"status": relicRawString("approved"),
 			"owner":  json.RawMessage(`{"name": "dylan"}`),
@@ -301,7 +301,7 @@ func TestRelicCreateBuildsOneRootPack(t *testing.T) {
 			t.Errorf("operation %d ID = %s, want %s", index, operation.ID, ids[index+2])
 		}
 	}
-	if create := pack.Operations[0].Relic; create.Title != "Task archive compaction" || create.Type != "spec" ||
+	if create := pack.Operations[0].Relic; create.Title != "Task archive compaction" || create.Type != "paper" ||
 		!create.CreatedAt.Equal(relicServiceTestTime) {
 		t.Errorf("relic.create = %+v", create)
 	}
@@ -412,14 +412,14 @@ func TestRelicCreateEnforcesAddTimeLimits(t *testing.T) {
 
 	store := newMemoryRelicStore()
 	_, err := newRelicTestService(store, relicServiceIDs(1, 2004)).Create(context.Background(),
-		RelicCreateInput{Title: "Too many", Type: "spec", Parts: manyParts(MaxRelicLiveParts + 1)})
+		RelicCreateInput{Title: "Too many", Type: "paper", Parts: manyParts(MaxRelicLiveParts + 1)})
 	requireRelicCategory(t, "2001 parts", err, CategoryValidation, "2001", "2000")
 	if len(store.writes) != 0 {
 		t.Fatalf("2001 parts: store saw %d writes", len(store.writes))
 	}
 
 	result, err := newRelicTestService(store, relicServiceIDs(1, 2003)).Create(context.Background(),
-		RelicCreateInput{Title: "Just enough", Type: "spec", Parts: manyParts(MaxRelicLiveParts)})
+		RelicCreateInput{Title: "Just enough", Type: "paper", Parts: manyParts(MaxRelicLiveParts)})
 	if err != nil {
 		t.Fatalf("2000 parts: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestRelicCreateEnforcesAddTimeLimits(t *testing.T) {
 	}
 	parts = append(parts, RelicPartInput{Type: "section", Body: &RelicBodyInput{Content: []byte("x")}})
 	_, err = newRelicTestService(store, relicServiceIDs(1, 30)).Create(context.Background(),
-		RelicCreateInput{Title: "Too large", Type: "spec", Parts: parts})
+		RelicCreateInput{Title: "Too large", Type: "paper", Parts: parts})
 	requireRelicCategory(t, "16 MiB + 1", err, CategoryValidation, "16777217", "16777216")
 	if len(store.writes) != 0 {
 		t.Fatalf("16 MiB + 1: store saw %d writes", len(store.writes))

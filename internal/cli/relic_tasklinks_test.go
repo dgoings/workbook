@@ -54,7 +54,7 @@ func TestLinkAddedInOneCloneIsVisibleFromTheTaskInAnother(t *testing.T) {
 	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	task := decodeMutationTask(t, mustRun(t, first, "create", "Implement compaction", "--json"), "create")
-	relicID := mustCreateRelic(t, first, "Archive plan", "--type", "spec").Relic.ID
+	relicID := mustCreateRelic(t, first, "Archive plan", "--type", "paper").Relic.ID
 	partID := addRelicParts(t, first, relicID, "section")[0]
 	linked := mustUpdateRelic(t, first, relicID, "--link", task.ID, "--from", partID, "--rel", "implemented-by")
 	if !linked.Changed {
@@ -64,7 +64,7 @@ func TestLinkAddedInOneCloneIsVisibleFromTheTaskInAnother(t *testing.T) {
 
 	mustRun(t, second, "fetch")
 	detail := shownTask(t, second, task.ID)
-	want := []core.TaskRelicLink{{Relic: relicID, Title: "Archive plan", Type: "spec", Part: partID, PartType: "section", Link: linkID, Rel: "implemented-by"}}
+	want := []core.TaskRelicLink{{Relic: relicID, Title: "Archive plan", Type: "paper", Part: partID, PartType: "section", Link: linkID, Rel: "implemented-by"}}
 	if mustJSON(t, detail.Relics) != mustJSON(t, want) {
 		t.Fatalf("show relics = %s, want %s", mustJSON(t, detail.Relics), mustJSON(t, want))
 	}
@@ -88,7 +88,7 @@ func TestConcurrentLinkChangesFromTwoClonesAllSurvive(t *testing.T) {
 	t.Parallel()
 	first, second := cliSyncRepositories(t)
 	task := decodeMutationTask(t, mustRun(t, first, "create", "Implement compaction", "--json"), "create")
-	relicID := mustCreateRelic(t, first, "Archive plan", "--type", "spec").Relic.ID
+	relicID := mustCreateRelic(t, first, "Archive plan", "--type", "paper").Relic.ID
 	mustUpdateRelic(t, first, relicID, "--link", task.ID, "--rel", "relates-to", "--link", task.ID, "--rel", "implemented-by")
 	shared := relicLinkIDs(shownRelic(t, first, relicID))
 	if len(shared) != 2 {
@@ -99,8 +99,8 @@ func TestConcurrentLinkChangesFromTwoClonesAllSurvive(t *testing.T) {
 		t.Fatalf("second clone links = %q, want %q", got, shared)
 	}
 
-	mustUpdateRelic(t, first, relicID, "--no-sync", "--link", task.ID, "--rel", "decided-by", "--unlink", shared[0])
-	mustUpdateRelic(t, second, relicID, "--no-sync", "--link", task.ID, "--rel", "tested-by", "--unlink", shared[1])
+	mustUpdateRelic(t, first, relicID, "--no-sync", "--link", task.ID, "--rel", "decided-in", "--unlink", shared[0])
+	mustUpdateRelic(t, second, relicID, "--no-sync", "--link", task.ID, "--rel", "summarizes", "--unlink", shared[1])
 	for range 2 {
 		mustRun(t, first, "sync")
 		mustRun(t, second, "sync")
@@ -113,7 +113,7 @@ func TestConcurrentLinkChangesFromTwoClonesAllSurvive(t *testing.T) {
 	for _, link := range shownRelic(t, first, relicID).Links {
 		rels[link.Rel] = true
 	}
-	if !rels["decided-by"] || !rels["tested-by"] {
+	if !rels["decided-in"] || !rels["summarizes"] {
 		t.Fatalf("links after both syncs have relationships %v", rels)
 	}
 	for name, repository := range map[string]string{"first": first, "second": second} {
@@ -131,7 +131,7 @@ func TestLinkToADeletedTaskFailsNoCommand(t *testing.T) {
 	t.Parallel()
 	repository, _ := cliSyncRepositories(t)
 	task := decodeMutationTask(t, mustRun(t, repository, "create", "Implement compaction", "--json"), "create")
-	relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "spec").Relic.ID
+	relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "paper").Relic.ID
 	mustUpdateRelic(t, repository, relicID, "--link", task.ID, "--rel", "implemented-by")
 	mustRun(t, repository, "delete", task.ID)
 	for _, command := range [][]string{
@@ -164,7 +164,7 @@ func TestShowOfATaskWithNoLinksIsUnchanged(t *testing.T) {
 		return []string{mustRun(t, repository, "show", unlinked.ID), mustRun(t, repository, "show", unlinked.ID, "--json")}
 	}
 	before := outputs()
-	relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "spec", "--no-sync").Relic.ID
+	relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "paper", "--no-sync").Relic.ID
 	mustUpdateRelic(t, repository, relicID, "--link", other.ID, "--rel", "relates-to")
 	after := outputs()
 	assertSameOutputs(t, "after another task gained a link", after, before)
@@ -179,8 +179,8 @@ func TestShowOfATaskWithNoLinksIsUnchanged(t *testing.T) {
 func TestRelicListLinkedToCombinesWithTypeAndAll(t *testing.T) {
 	t.Parallel()
 	repository, task, spec, partID := linkedRelicRepository(t)
-	plan := mustCreateRelic(t, repository, "Rollout", "--type", "plan", "--no-sync").Relic.ID
-	gone := mustCreateRelic(t, repository, "Old plan", "--type", "plan", "--no-sync").Relic.ID
+	plan := mustCreateRelic(t, repository, "Rollout", "--type", "agenda", "--no-sync").Relic.ID
+	gone := mustCreateRelic(t, repository, "Old plan", "--type", "agenda", "--no-sync").Relic.ID
 	mustUpdateRelic(t, repository, spec, "--link", task.ID, "--rel", "relates-to", "--link", task.ID, "--from", partID, "--rel", "implemented-by")
 	mustUpdateRelic(t, repository, plan, "--link", task.ID, "--rel", "relates-to")
 	mustUpdateRelic(t, repository, gone, "--link", task.ID, "--rel", "relates-to")
@@ -196,8 +196,8 @@ func TestRelicListLinkedToCombinesWithTypeAndAll(t *testing.T) {
 	if got := ids(linkedToTask(t, repository, task.ID)); !slices.Equal(got, []string{spec, plan}) {
 		t.Fatalf("--linked-to = %q", got)
 	}
-	if got := ids(linkedToTask(t, repository, task.ID, "--type", "plan")); !slices.Equal(got, []string{plan}) {
-		t.Fatalf("--linked-to --type plan = %q", got)
+	if got := ids(linkedToTask(t, repository, task.ID, "--type", "agenda")); !slices.Equal(got, []string{plan}) {
+		t.Fatalf("--linked-to --type agenda = %q", got)
 	}
 	if got := ids(linkedToTask(t, repository, task.ID, "--all")); !slices.Equal(got, []string{spec, plan, gone}) {
 		t.Fatalf("--linked-to --all = %q", got)
@@ -221,9 +221,9 @@ func TestReverseLookupsSurviveDeletingTheIndex(t *testing.T) {
 			t.Parallel()
 			repository := relicRepositoryFor(t, objectFormat)
 			tasks := []core.Task{cliCreateTask(t, repository, "First"), cliCreateTask(t, repository, "Second")}
-			relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "spec", "--no-sync").Relic.ID
+			relicID := mustCreateRelic(t, repository, "Archive plan", "--type", "paper", "--no-sync").Relic.ID
 			partID := addRelicParts(t, repository, relicID, "section")[0]
-			other := mustCreateRelic(t, repository, "Rollout", "--type", "plan", "--no-sync").Relic.ID
+			other := mustCreateRelic(t, repository, "Rollout", "--type", "agenda", "--no-sync").Relic.ID
 			mustUpdateRelic(t, repository, relicID, "--link", tasks[0].ID, "--rel", "relates-to",
 				"--link", tasks[1].ID, "--from", partID, "--rel", "implemented-by")
 			mustUpdateRelic(t, repository, other, "--link", tasks[0].ID, "--rel", "relates-to")

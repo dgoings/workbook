@@ -837,7 +837,7 @@ func syncClean(t *testing.T, repo *Repository, config core.ProjectConfig) SyncRu
 func (c relicClones) share(t *testing.T, input core.RelicCreateInput) core.RelicMutationResult {
 	t.Helper()
 	if input.Type == "" {
-		input.Type = "spec"
+		input.Type = "paper"
 	}
 	created, err := c.a.Create(context.Background(), input)
 	if err != nil {

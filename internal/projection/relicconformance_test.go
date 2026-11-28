@@ -218,7 +218,7 @@ func TestUnknownSchemaRowIsRejudgedAfterSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := createIndexRelic(t, relicServiceForIndex(repository, config, 4500), "Other", 1)
+	other := createIndexRelicOfType(t, relicServiceForIndex(repository, config, 4500), "spec", "Other", 1)
 	relicID := created.Relic.ID
 
 	source := &hidingSchemaSource{countingRelicSource: newCountingRelicSource(repository), hidden: map[string]bool{version.ID: true}}
@@ -273,7 +273,7 @@ func TestTaskPassLeavesJudgingToTheNextRelicRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Created with no schema store, so it names no version and is open.
-	open := createIndexRelic(t, relicServiceForIndex(repository, config, 6000), "Open", 1)
+	open := createIndexRelicOfType(t, relicServiceForIndex(repository, config, 6000), "spec", "Open", 1)
 	source := &hidingSchemaSource{countingRelicSource: newCountingRelicSource(repository)}
 	listings := &countingListingSource{hidingSchemaSource: source}
 	store := openRelicStore(t, listings, config, filepath.Join(t.TempDir(), "cache.sqlite"))

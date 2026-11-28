@@ -87,7 +87,7 @@ func TestRelicCreateShowListDeleteRestoreJSON(t *testing.T) {
 		t.Run(objectFormat, func(t *testing.T) {
 			t.Parallel()
 			repository := relicRepositoryFor(t, objectFormat)
-			created := mustCreateRelic(t, repository, "Task archive compaction", "--type", "spec")
+			created := mustCreateRelic(t, repository, "Task archive compaction", "--type", "paper")
 			id := created.Relic.ID
 			if !relicIDGrammar.MatchString(id) || !strings.HasPrefix(id, "WB-R-") {
 				t.Fatalf("created ID = %q, want a relic ID under WB", id)
@@ -104,7 +104,7 @@ func TestRelicCreateShowListDeleteRestoreJSON(t *testing.T) {
 			mustRelic(t, repository, &shown, "show", id)
 			author := gitOutput(t, repository, "config", "user.email")
 			for member, want := range map[string]string{
-				"title": `"Task archive compaction"`, "type": `"spec"`, "schema": "null", "retired": "false",
+				"title": `"Task archive compaction"`, "type": `"paper"`, "schema": "null", "retired": "false",
 				"deleted": "false", "properties": "{}", "parts": "[]", "links": "[]",
 				"author": mustJSON(t, author), "id": mustJSON(t, id),
 			} {
@@ -162,7 +162,7 @@ func mustJSON(t *testing.T, value any) string {
 // with a markdown body, one with a body that is not UTF-8, one with none.
 func relicTestDocument(t *testing.T) []byte {
 	t.Helper()
-	return []byte(`{"format":"workbook.relic","version":1,"title":"Archive plan","type":"spec","schema":null,` +
+	return []byte(`{"format":"workbook.relic","version":1,"title":"Archive plan","type":"paper","schema":null,` +
 		`"retired":false,"deleted":false,"properties":{"status":"approved","weight":3},"parts":[` +
 		`{"type":"section","fields":{"heading":"Goals"},"body":{"format":"md","bytes":0,"text":"# Goals\n\nKeep it small.\n"}},` +
 		`{"type":"figure","fields":{},"body":{"format":"bin","bytes":0,"base64":"` +
@@ -213,7 +213,7 @@ func TestRelicCreateFromFileAndExportRoundTrip(t *testing.T) {
 		t.Fatalf("DecodeRelicDocument(second export): %v", err)
 	}
 	assertSameRelicContent(t, document, again)
-	if document.Title != "Archive plan" || document.Type != "spec" || len(document.Properties) != 2 {
+	if document.Title != "Archive plan" || document.Type != "paper" || len(document.Properties) != 2 {
 		t.Fatalf("export = %+v, want the file's title, type and properties", document)
 	}
 	if body := document.Parts[1].Body; body == nil || body.Base64 == nil ||
@@ -221,8 +221,8 @@ func TestRelicCreateFromFileAndExportRoundTrip(t *testing.T) {
 		t.Fatalf("exported binary body = %+v", body)
 	}
 
-	other := mustCreateRelic(t, repository, "Other", "--type", "plan", "--from-file", path)
-	if other.Relic.Title != "Other" || other.Relic.Type != "plan" || len(other.Parts) != 3 {
+	other := mustCreateRelic(t, repository, "Other", "--type", "agenda", "--from-file", path)
+	if other.Relic.Title != "Other" || other.Relic.Type != "agenda" || len(other.Parts) != 3 {
 		t.Fatalf("create with a title and --type over a file = %+v", other.Relic)
 	}
 
@@ -244,7 +244,7 @@ func TestRelicExportWritesHTMLCharactersAsThemselves(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
 	body := "# <Title> & more\n\n<details>a -> b && c</details>\n"
-	id := mustCreateRelic(t, repository, "Tags <and> & ampersands", "--type", "spec").Relic.ID
+	id := mustCreateRelic(t, repository, "Tags <and> & ampersands", "--type", "paper").Relic.ID
 	mustUpdateRelic(t, repository, id, "--set", "owner=Alice <alice@example.com>",
 		"--add-part", "--part-type", "note", "--body-file", writeRelicBodyFile(t, "body.md", body))
 
@@ -366,7 +366,7 @@ func TestRelicShowRefusesATaskID(t *testing.T) {
 		t.Fatalf("create = (%d, %q, %q)", code, stdout, stderr)
 	}
 	task := decodeMutationTask(t, stdout, "create")
-	mustCreateRelic(t, repository, "A relic", "--type", "spec")
+	mustCreateRelic(t, repository, "A relic", "--type", "paper")
 	before := gitOutput(t, repository, "rev-parse", "refs/workbook/tasks/"+task.ID)
 
 	for _, command := range []string{"show", "diff", "delete", "restore", "export"} {
@@ -388,7 +388,7 @@ func TestRelicCommandsRefuseBadInvocations(t *testing.T) {
 		{"nope"},
 		{"create"},
 		{"create", "T"},
-		{"create", "--type", "spec"},
+		{"create", "--type", "paper"},
 		{"show"},
 		{"diff"},
 		{"delete"},
@@ -415,13 +415,13 @@ func TestRelicCommandsRefuseBadInvocations(t *testing.T) {
 func TestRelicPrefixResolution(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	first := mustCreateRelic(t, repository, "First", "--type", "spec")
+	first := mustCreateRelic(t, repository, "First", "--type", "paper")
 	var shown core.RelicDocument
 	mustRelic(t, repository, &shown, "show", strings.ToLower(first.Relic.ID[:len(first.Relic.ID)-3]))
 	if shown.ID != first.Relic.ID {
 		t.Fatalf("show <lower-case prefix> = %q, want %q", shown.ID, first.Relic.ID)
 	}
-	mustCreateRelic(t, repository, "Second", "--type", "spec")
+	mustCreateRelic(t, repository, "Second", "--type", "paper")
 	message := relicErrorMessage(t, repository, 5, core.CategoryValidation, "show", "WB-R-")
 	if !strings.Contains(message, `relic prefix "WB-R-" matches 2 relics`) || !strings.Contains(message, "use more characters") {
 		t.Fatalf("show WB-R- message = %q, want it to count the matches and say to use more characters", message)
@@ -456,7 +456,7 @@ func TestRelicTextOutputIsTerminalSafe(t *testing.T) {
 	repository := initializedRepository(t)
 	hostile := "red \x1b[31malert\nsecond line"
 	document := []byte(`{"format":"workbook.relic","version":1,"title":` + mustJSON(t, hostile) +
-		`,"type":"spec","schema":null,"retired":false,"deleted":false,"properties":{"note":` + mustJSON(t, hostile) +
+		`,"type":"paper","schema":null,"retired":false,"deleted":false,"properties":{"note":` + mustJSON(t, hostile) +
 		`},"parts":[{"type":"section","fields":{"heading":` + mustJSON(t, hostile) +
 		`},"body":{"format":"md","bytes":0,"text":` + mustJSON(t, hostile+"\n") + `}}],"links":[]}`)
 	created := mustCreateRelic(t, repository, "--from-file", writeRelicDocumentFile(t, document))
@@ -465,7 +465,7 @@ func TestRelicTextOutputIsTerminalSafe(t *testing.T) {
 		{"relic", "list"},
 		{"relic", "show", created.Relic.ID},
 		{"relic", "show", created.Relic.ID, "--body"},
-		{"relic", "create", hostile, "--type", "spec"},
+		{"relic", "create", hostile, "--type", "paper"},
 	} {
 		code, stdout, stderr := run(t, repository, args...)
 		if code != 0 || stderr != "" {
@@ -487,7 +487,7 @@ func TestRelicIsAuthoredByTheActingUser(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
 	const actor = "alice@example.test"
-	code, stdout, stderr := runAs(t, repository, actor, "relic", "create", "Authored", "--type", "spec", "--json")
+	code, stdout, stderr := runAs(t, repository, actor, "relic", "create", "Authored", "--type", "paper", "--json")
 	if code != 0 || stderr != "" {
 		t.Fatalf("relic create as %s = (%d, %q, %q)", actor, code, stdout, stderr)
 	}
@@ -542,20 +542,20 @@ func TestRelicIsAuthoredByTheActingUser(t *testing.T) {
 func TestRelicListMarksDeletedRelics(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	live := mustCreateRelic(t, repository, "Kept", "--type", "spec").Relic.ID
-	deleted := mustCreateRelic(t, repository, "Dropped", "--type", "plan").Relic.ID
+	live := mustCreateRelic(t, repository, "Kept", "--type", "paper").Relic.ID
+	deleted := mustCreateRelic(t, repository, "Dropped", "--type", "agenda").Relic.ID
 	mustRelic(t, repository, nil, "delete", deleted)
 
-	liveLine := live + "\tspec\t0 parts\tKept\n"
+	liveLine := live + "\tpaper\t0 parts\tKept\n"
 	code, stdout, stderr := run(t, repository, "relic", "list")
 	if code != 0 || stderr != "" || stdout != liveLine {
 		t.Fatalf("relic list = (%d, %q, %q), want only %q", code, stdout, stderr, liveLine)
 	}
 	// Relics list in ID order, and two made in the same millisecond may sort
 	// either way.
-	want := liveLine + deleted + "\tplan\t0 parts\tDropped\tdeleted\n"
+	want := liveLine + deleted + "\tagenda\t0 parts\tDropped\tdeleted\n"
 	if deleted < live {
-		want = deleted + "\tplan\t0 parts\tDropped\tdeleted\n" + liveLine
+		want = deleted + "\tagenda\t0 parts\tDropped\tdeleted\n" + liveLine
 	}
 	code, stdout, stderr = run(t, repository, "relic", "list", "--all")
 	if code != 0 || stderr != "" || stdout != want {

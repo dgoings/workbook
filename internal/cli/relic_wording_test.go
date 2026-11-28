@@ -12,7 +12,7 @@ import (
 func TestRelicShowPrintsANullValue(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
-	created := mustCreateRelic(t, repository, "Values", "--type", "spec")
+	created := mustCreateRelic(t, repository, "Values", "--type", "paper")
 	id := created.Relic.ID
 	added := mustUpdateRelic(t, repository, id, "--set-json", "reviewed=null", "--set", "owner=",
 		"--add-part", "--part-type", "note", "--field-json", "checked=null")
@@ -59,8 +59,8 @@ func TestRelicCreateFromADocumentWithNoTypeSaysSo(t *testing.T) {
 		t.Fatalf("a refused document wrote a relic:\n%s", refs)
 	}
 	file := writeRelicDocumentFile(t, []byte(`{"format":"workbook.relic","version":1,"title":"Untyped"}`))
-	if created := mustCreateRelic(t, repository, "--from-file", file, "--type", "spec"); created.Relic.Type != "spec" {
-		t.Fatalf("create --from-file --type spec made a relic of type %q", created.Relic.Type)
+	if created := mustCreateRelic(t, repository, "--from-file", file, "--type", "paper"); created.Relic.Type != "paper" {
+		t.Fatalf("create --from-file --type paper made a relic of type %q", created.Relic.Type)
 	}
 }
 
