@@ -1135,8 +1135,8 @@ func TestSchemaVersionNineCacheIsReplaced(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT value FROM projection_meta WHERE key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != schemaVersion || schemaVersion != "14" {
-		t.Fatalf("schema version = %s (built %s), want 14", version, schemaVersion)
+	if version != schemaVersion || schemaVersion != "15" {
+		t.Fatalf("schema version = %s (built %s), want 15", version, schemaVersion)
 	}
 	countRows(t, store, `SELECT COUNT(link_count) FROM relics`)
 	for _, table := range []string{"relics", "relic_properties", "relic_parts", "relic_operations", "relic_links"} {
@@ -1562,8 +1562,8 @@ func TestSchemaVersionTwelveCacheIsReplaced(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT value FROM projection_meta WHERE key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != schemaVersion || schemaVersion != "14" {
-		t.Fatalf("schema version = %s (built %s), want 14", version, schemaVersion)
+	if version != schemaVersion || schemaVersion != "15" {
+		t.Fatalf("schema version = %s (built %s), want 15", version, schemaVersion)
 	}
 	countRows(t, store, `SELECT COUNT(compacted_run) + COUNT(compacted_at) + COUNT(compacted_boundary) + COUNT(compacted_since) FROM relics`)
 	countRows(t, store, `SELECT COUNT(dropped_removed_at) + COUNT(dropped_at) FROM relic_parts`)

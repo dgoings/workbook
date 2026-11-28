@@ -3,6 +3,7 @@ package projection
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -622,4 +623,204 @@ func trimNewline(value string) string {
 		value = value[:len(value)-1]
 	}
 	return value
+}
+
+// descriptionMergeEdit is the local edit the merge tests record, before the
+// merge that names it.
+const descriptionMergeEditID = "01K0M6B8A4FTT8C39MXXYTW7F1"
+
+// descriptionMergeOperations is the pack a replay writes for a local
+// description edit the remote also changed: the edit, then the merge naming it.
+func descriptionMergeOperations(taskID string, wallTime time.Time) []core.Operation {
+	const ancestor, current = "one\ntwo\nthree\n", "one\nTWO\nthree\n"
+	return []core.Operation{
+		{ID: descriptionMergeEditID, Type: core.OperationFieldSet, Field: "description", Value: "one\ntwo\nTHREE\n"},
+		{
+			ID: core.DescriptionMergeOperationID(taskID, descriptionMergeEditID, ancestor, current,
+				core.DescriptionLineMergeMethod, wallTime),
+			Type:  core.OperationDescriptionMerge,
+			Value: "one\nTWO\nTHREE\n",
+			Merge: &core.DescriptionMerge{
+				Other: descriptionMergeEditID, Ancestor: ancestor, Current: current,
+				Method: core.DescriptionLineMergeMethod,
+			},
+		},
+	}
+}
+
+// writeMergedDescription creates a task and records a merged description as its
+// second pack, returning the task and the heads before and after the merge.
+func writeMergedDescription(
+	t *testing.T,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+) (core.Task, string, string) {
+	t.Helper()
+	ctx := context.Background()
+	created := createTask(t, repository, config, "Merged description")
+	head, found, err := repository.InspectTaskHead(ctx, config, created.ID)
+	if err != nil || !found {
+		t.Fatalf("InspectTaskHead() = %v, %v", found, err)
+	}
+	snapshots, err := repository.ReadTaskHeads(ctx, config, []gitstore.TaskHead{head})
+	if err != nil || len(snapshots) != 1 {
+		t.Fatalf("ReadTaskHeads() = %d snapshots, %v", len(snapshots), err)
+	}
+	parent := snapshots[0]
+	wallTime := time.Date(2026, time.July, 26, 12, 10, 0, 0, time.UTC)
+	pack := core.NewOperationPack(config.ProjectID, created.ID, created.HistoryGeneration, "test@example.test",
+		parent.State.LogicalClock+1, wallTime, descriptionMergeOperations(created.ID, wallTime))
+	state, err := core.Apply(&parent.State, pack)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	written, err := repository.Write(ctx, config, &parent, pack, state, "test: merge description")
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	return created, parent.Head, written.Head
+}
+
+// assertHistoryEqualsGit compares the chain the index serves, ending at head,
+// with the one Git holds, operation for operation.
+func assertHistoryEqualsGit(
+	t *testing.T,
+	store *Store,
+	repository *gitstore.Repository,
+	config core.ProjectConfig,
+	taskID, head string,
+) {
+	t.Helper()
+	ctx := context.Background()
+	// The rows must be there, or CommitHistory would answer from Git and the
+	// comparison would prove nothing about the index.
+	if rows := countOperationRows(t, store, taskID); rows != 3 {
+		t.Fatalf("projected operation rows = %d, want the create and the two merge operations", rows)
+	}
+	indexed, err := store.CommitHistory(ctx, config, taskID, head)
+	if err != nil {
+		t.Fatalf("CommitHistory() error = %v", err)
+	}
+	results, err := repository.ReadTaskOperations(ctx, config, []gitstore.TaskHistoryRequest{
+		{Head: gitstore.TaskHead{TaskID: taskID, ObjectID: head}},
+	})
+	if err != nil || len(results) != 1 || results[0].Truncated != nil {
+		t.Fatalf("ReadTaskOperations() = %#v, %v", results, err)
+	}
+	if len(indexed.Entries) != len(results[0].Commits) {
+		t.Fatalf("index history = %d entries, Git = %d", len(indexed.Entries), len(results[0].Commits))
+	}
+	for index, recorded := range results[0].Commits {
+		entry := indexed.Entries[index]
+		if entry.Commit != recorded.ObjectID || entry.Parent != recorded.Parent {
+			t.Errorf("entry %d = %s onto %q, want %s onto %q",
+				index, entry.Commit, entry.Parent, recorded.ObjectID, recorded.Parent)
+		}
+		if !reflect.DeepEqual(entry.Operation, recorded.Operation) {
+			t.Errorf("entry %d pack =\n%#v\nGit =\n%#v", index, entry.Operation, recorded.Operation)
+		}
+	}
+}
+
+func TestProjectedOperationKeepsTheDescriptionMerge(t *testing.T) {
+	t.Parallel()
+	// Mutation caught: a payload that omits the merge member, which reads back
+	// as a description.merge no fold accepts.
+	wallTime := time.Date(2026, time.July, 26, 12, 10, 0, 0, time.UTC)
+	want := descriptionMergeOperations("WB-01K0M6B8A4FTT8C39MXXYTW7D1", wallTime)[1]
+	payload, err := encodeOperationPayload(want)
+	if err != nil {
+		t.Fatalf("encodeOperationPayload() error = %v", err)
+	}
+	got, ok := decodeOperation(operationScan{
+		operationID: want.ID, operationType: string(want.Type), value: want.Value, payload: payload,
+	})
+	if !ok || !reflect.DeepEqual(got, want) {
+		t.Fatalf("decoded operation (ok %v) =\n%#v\nwant\n%#v\npayload %q", ok, got, want, payload)
+	}
+}
+
+func TestHistoryFromIndexEqualsGitForAMergedDescription(t *testing.T) {
+	t.Parallel()
+	forBothRelicIndexFormats(t, func(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		created, before, after := writeMergedDescription(t, repository, config)
+
+		store, err := openForTest(t, ctx, repository, config)
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		if _, err := store.List(ctx, config); err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+		assertHistoryEqualsGit(t, store, repository, config, created.ID, after)
+
+		// A comparison folds the projected rows back into packs and applies them.
+		service := core.Service{Config: config, Reader: store, History: store, Actor: "test@example.test"}
+		detail, err := service.ShowDetail(ctx, created.ID, core.ShowOptions{
+			Compare: &core.ComparePoints{From: before, To: after},
+		})
+		if err != nil {
+			t.Fatalf("ShowDetail(compare) error = %v", err)
+		}
+		if detail.Comparison == nil || len(detail.Comparison.Fields) != 1 ||
+			detail.Comparison.Fields[0].Field != "description" {
+			t.Fatalf("comparison = %#v, want the description alone", detail.Comparison)
+		}
+		if detail.Description != "one\nTWO\nTHREE\n" {
+			t.Fatalf("description = %q, want the merged text", detail.Description)
+		}
+	})
+}
+
+func TestSchemaVersionIsFifteen(t *testing.T) {
+	t.Parallel()
+	// Mutation caught: leaving the stamp at 14, which trusts an index an older
+	// build wrote, whose merge rows have lost their merge member.
+	if schemaVersion != "15" {
+		t.Fatalf("schemaVersion = %q, want \"15\"; keeping the description merge moved it there", schemaVersion)
+	}
+	forBothRelicIndexFormats(t, func(t *testing.T, repository *gitstore.Repository, config core.ProjectConfig) {
+		ctx := context.Background()
+		created, _, after := writeMergedDescription(t, repository, config)
+
+		old, err := openForTest(t, ctx, repository, config)
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		if _, err := old.List(ctx, config); err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+		// What a version 14 build leaves: the merge's row without its member.
+		if _, err := old.db.ExecContext(ctx,
+			`UPDATE operations SET payload = '' WHERE type = ?`, string(core.OperationDescriptionMerge)); err != nil {
+			t.Fatalf("strip the merge payload: %v", err)
+		}
+		if _, err := old.db.ExecContext(ctx,
+			`UPDATE projection_meta SET value = '14' WHERE key = 'schema_version'`); err != nil {
+			t.Fatalf("age the schema stamp: %v", err)
+		}
+		if err := old.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		store, err := openForTest(t, ctx, repository, config)
+		if err != nil {
+			t.Fatalf("Open(version 14 cache) error = %v", err)
+		}
+		if store.cacheUsable(ctx) {
+			t.Fatal("a version 14 cache is usable")
+		}
+		if _, err := store.List(ctx, config); err != nil {
+			t.Fatalf("List(rebuilt) error = %v", err)
+		}
+		var version string
+		if err := store.db.QueryRowContext(ctx, `SELECT value FROM projection_meta WHERE key = 'schema_version'`).Scan(&version); err != nil {
+			t.Fatal(err)
+		}
+		if version != "15" {
+			t.Fatalf("schema version = %s, want 15", version)
+		}
+		assertHistoryEqualsGit(t, store, repository, config, created.ID, after)
+	})
 }

@@ -1,6 +1,11 @@
 package projection
 
-// schemaVersion is bumped to 14 because a relic's stored judgment now covers
+// schemaVersion is bumped to 15 because an operation row now keeps the merge a
+// description.merge records. A version 14 cache can hold such a row without
+// it, which would replay as a corrupt merge, so it is discarded and Git read
+// again.
+//
+// Version 14 was bumped because a relic's stored judgment now covers
 // its links and the built-in schemas: conformance judges each link's
 // relationship against the default names and the ones its version adds, and
 // each link's pointer, after the properties and parts, and a relic can name a
@@ -84,7 +89,7 @@ package projection
 // checkpoint and every recorded pack, where a missing column reads as
 // generation zero — a claim rather than an absence, and the one claim that must
 // never be made wrongly.
-const schemaVersion = "14"
+const schemaVersion = "15"
 
 const schema = `
 CREATE TABLE projection_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

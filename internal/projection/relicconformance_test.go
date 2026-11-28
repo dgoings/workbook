@@ -368,8 +368,8 @@ func TestSchemaVersionTenCacheIsReplaced(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT value FROM projection_meta WHERE key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != schemaVersion || schemaVersion != "14" {
-		t.Fatalf("schema version = %s (built %s), want 14", version, schemaVersion)
+	if version != schemaVersion || schemaVersion != "15" {
+		t.Fatalf("schema version = %s (built %s), want 15", version, schemaVersion)
 	}
 	countRows(t, store, `SELECT COUNT(conformance) + COUNT(schema_problem) FROM relics`)
 }

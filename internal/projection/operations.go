@@ -40,8 +40,9 @@ const selectOperationColumns = `
 	FROM operations WHERE task_id = ?`
 
 // operationPayload is everything an operation carries beyond the scalar columns
-// and the task payload: what a comment says, what an attachment is, and the
-// compaction summary a history.checkpoint carries beside its task.
+// and the task payload: what a comment says, what an attachment is, the
+// compaction summary a history.checkpoint carries beside its task, and the
+// texts a description.merge was made from.
 //
 // It is cached because a projected chain is replayed, not only displayed. A
 // comparison between two commits folds the rows back into packs and applies
@@ -49,16 +50,18 @@ const selectOperationColumns = `
 // no text — and the fold would refuse it, which turns a cache omission into a
 // task whose history cannot be read.
 type operationPayload struct {
-	CommentID    string               `json:"commentId,omitempty"`
-	Body         string               `json:"body,omitempty"`
-	Attachment   *core.AttachmentData `json:"attachment,omitempty"`
-	AttachmentID string               `json:"attachmentId,omitempty"`
-	Checkpoint   *core.CheckpointData `json:"checkpoint,omitempty"`
+	CommentID    string                 `json:"commentId,omitempty"`
+	Body         string                 `json:"body,omitempty"`
+	Attachment   *core.AttachmentData   `json:"attachment,omitempty"`
+	AttachmentID string                 `json:"attachmentId,omitempty"`
+	Checkpoint   *core.CheckpointData   `json:"checkpoint,omitempty"`
+	Merge        *core.DescriptionMerge `json:"merge,omitempty"`
 }
 
 func encodeOperationPayload(operation core.Operation) (string, error) {
 	if operation.CommentID == "" && operation.Body == "" &&
-		operation.Attachment == nil && operation.AttachmentID == "" && operation.Checkpoint == nil {
+		operation.Attachment == nil && operation.AttachmentID == "" && operation.Checkpoint == nil &&
+		operation.Merge == nil {
 		return "", nil
 	}
 	encoded, err := json.Marshal(operationPayload{
@@ -67,6 +70,7 @@ func encodeOperationPayload(operation core.Operation) (string, error) {
 		Attachment:   operation.Attachment,
 		AttachmentID: operation.AttachmentID,
 		Checkpoint:   operation.Checkpoint,
+		Merge:        operation.Merge,
 	})
 	if err != nil {
 		return "", core.Wrap(core.CategoryCorruptData, "cannot project operation payload", err)
@@ -397,6 +401,7 @@ func decodeOperation(row operationScan) (core.Operation, bool) {
 		operation.Attachment = payload.Attachment
 		operation.AttachmentID = payload.AttachmentID
 		operation.Checkpoint = payload.Checkpoint
+		operation.Merge = payload.Merge
 	}
 	return operation, true
 }

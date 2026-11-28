@@ -93,8 +93,8 @@ func TestProjectionRoundTripsAssignments(t *testing.T) {
 // stale stamp and no probe to save it.
 //
 // So this stamps the previous version onto an otherwise-current cache and
-// requires it to be discarded. With the constant at "14" the stamp mismatches
-// and the cache is rebuilt; revert it to "13" and the stamp matches, the cache
+// requires it to be discarded. With the constant at "15" the stamp mismatches
+// and the cache is rebuilt; revert it to "14" and the stamp matches, the cache
 // survives, and this fails.
 //
 // The versions each release moved it for: "4" was assignments, "5" the comment
@@ -104,15 +104,16 @@ func TestProjectionRoundTripsAssignments(t *testing.T) {
 // date, "9" the relic tables, "10" the relic links, "11" relic
 // conformance, "12" links to relics with their seen versions and
 // pointers, "13" a relic's compaction and the dates of its dropped parts,
-// and "14" relic judgments that cover links and the built-in schemas.
+// "14" relic judgments that cover links and the built-in schemas, and "15"
+// the merge a description.merge operation row records.
 func TestACacheStampedWithThePreviousSchemaVersionIsDiscarded(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	// Belt and braces: the behavioural half below is what actually pins the
 	// stamp, and this says out loud which version it is pinned against.
-	if schemaVersion != "14" {
-		t.Fatalf("schemaVersion = %q, want \"14\"; judging relic links and built-ins moved it there", schemaVersion)
+	if schemaVersion != "15" {
+		t.Fatalf("schemaVersion = %q, want \"15\"; keeping the description merge moved it there", schemaVersion)
 	}
 	snapshot := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-stamped", "Stamped")
 	snapshot.State.Task.Assignments = []core.Assignment{
@@ -134,7 +135,7 @@ func TestACacheStampedWithThePreviousSchemaVersionIsDiscarded(t *testing.T) {
 	// Age the stamp without touching the tables, which is the one thing the
 	// probe cannot see.
 	if _, err := store.db.ExecContext(ctx,
-		`UPDATE projection_meta SET value = '8' WHERE key = 'schema_version'`); err != nil {
+		`UPDATE projection_meta SET value = '14' WHERE key = 'schema_version'`); err != nil {
 		t.Fatalf("age the schema stamp: %v", err)
 	}
 	// A row the source no longer serves, so a rebuild is observable.
