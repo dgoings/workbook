@@ -6536,13 +6536,12 @@ says why:
 - **The remote moved on:**
   `relic <relic-id>: origin changed it since this clone compacted it, so the checkpoint was not published; the next sync keeps origin's history, with every change, and drops this compaction`
 - **The remote refused it otherwise**, as a host that refuses non-fast-forward
-  updates to Workbook refs does: the detail begins
-  `relic <relic-id>: origin refused the compacted checkpoint:` and ends
-  `; the relic stays compacted here`. Between the two, this build prints the
-  refusal in a task's words, which name `workbook compact --adopt`; that
-  command takes no relic. No command undoes a relic compaction. Every later push
-  is refused the same way until the host allows it or the remote's copy of the
-  relic changes, when the next sync drops the compaction, as below.
+  updates to Workbook refs does:
+  `relic <relic-id>: origin refused the compacted checkpoint (<git reason>); the relic stays compacted here and unpublished until origin accepts it, or until origin's copy of the relic changes and the next sync drops this compaction`.
+  No command undoes a relic compaction, and `workbook compact --adopt` takes
+  no relic. Every later push is refused the same way until the host allows it
+  or the remote's copy of the relic changes, when the next sync drops the
+  compaction, as below.
 
 #### Other clones adopt a relic compaction
 

@@ -546,7 +546,7 @@ func (r *Repository) pushRelicHeads(ctx context.Context, candidates []relicPushC
 		args = append(args, candidate.Head+":"+relicRefPrefix+candidate.RelicID)
 	}
 	push := r.gitWithEnvResult(ctx, []string{"WORKBOOK_PRE_PUSH_ACTIVE=1"}, nil, args...)
-	pushed, err := parsePushPorcelain(r.remote(), push.stdout, expected, forced, gitCommandResultError(push))
+	pushed, err := parseLeasedPushPorcelain(r.remote(), push.stdout, expected, forced, relicLeaseRefusedDetail, gitCommandResultError(push))
 	if err != nil {
 		return nil, err
 	}
@@ -562,13 +562,8 @@ func (r *Repository) pushRelicHeads(ctx context.Context, candidates []relicPushC
 		switch {
 		case item.Status == SyncCompactionPublished:
 			_ = r.advanceRelicTrackingRef(ctx, relicID, leased.Lease, leased.Head)
-		case item.Status == SyncRejected && isLeased && item.Detail == compactionStaleDetail(r.remote()):
-			outcome.Detail = fmt.Sprintf("relic %s: %s changed it since this clone compacted it, so the checkpoint was "+
-				"not published; the next sync keeps %s's history, with every change, and drops this compaction",
-				relicID, r.remote(), r.remote())
 		case item.Status == SyncRejected && isLeased:
-			outcome.Detail = fmt.Sprintf("relic %s: %s refused the compacted checkpoint: %s; the relic stays compacted here",
-				relicID, r.remote(), item.Detail)
+			outcome.Detail = item.Detail
 		case item.Status == SyncRejected:
 			outcome.Detail = fmt.Sprintf("relic %s: %s refused it %s; the next sync replays any local changes onto %s's tip",
 				relicID, r.remote(), item.Detail, r.remote())
@@ -576,6 +571,24 @@ func (r *Repository) pushRelicHeads(ctx context.Context, candidates []relicPushC
 		outcomes[relicID] = outcome
 	}
 	return outcomes, nil
+}
+
+// relicLeaseRefusedDetail is what a push says when remote refused the leased
+// checkpoint of a relic. A remote that moved on settles itself: the next sync
+// keeps its history and drops the compaction. Any other refusal is the
+// remote's policy, a hook or a ruleset, and Git's reason for it stays in
+// parentheses as the only account of that policy. No command undoes a relic
+// compaction, so the text names none: the checkpoint waits here until the
+// remote accepts it or its copy of the relic changes.
+func relicLeaseRefusedDetail(remote, relicID, reason string) string {
+	if strings.Contains(reason, "stale info") {
+		return fmt.Sprintf("relic %s: %s changed it since this clone compacted it, so the checkpoint was "+
+			"not published; the next sync keeps %s's history, with every change, and drops this compaction",
+			relicID, remote, remote)
+	}
+	return fmt.Sprintf("relic %s: %s refused the compacted checkpoint (%s); the relic stays compacted here and "+
+		"unpublished until %s accepts it, or until %s's copy of the relic changes and the next sync drops this compaction",
+		relicID, remote, reason, remote, remote)
 }
 
 // advanceRelicTrackingRef compare-and-swaps a relic's tracking ref from

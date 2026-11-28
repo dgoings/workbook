@@ -151,6 +151,20 @@ func parsePushPorcelain(
 	forced map[string]bool,
 	commandErr error,
 ) (map[string]SyncTaskResult, error) {
+	return parseLeasedPushPorcelain(remote, output, expected, forced, leasedRejectionDetail, commandErr)
+}
+
+// parseLeasedPushPorcelain is parsePushPorcelain with the words a refused
+// lease is reported in: a task's and a relic's differ, because what settles a
+// refused task checkpoint, `workbook compact --adopt`, takes no relic.
+func parseLeasedPushPorcelain(
+	remote string,
+	output []byte,
+	expected map[string]string,
+	forced map[string]bool,
+	refusedLease func(remote, id, reason string) string,
+	commandErr error,
+) (map[string]SyncTaskResult, error) {
 	results := make(map[string]SyncTaskResult, len(expected))
 	if len(output) > 0 && output[len(output)-1] != '\n' {
 		return nil, core.Errorf(core.CategoryOperational, "Git returned unterminated push porcelain")
@@ -192,7 +206,7 @@ func parsePushPorcelain(
 			result.Status = SyncRejected
 			result.Detail = fields[2]
 			if forced[destination] {
-				result.Detail = leasedRejectionDetail(remote, taskID, fields[2])
+				result.Detail = refusedLease(remote, taskID, fields[2])
 			}
 			hasRejected = true
 		case '+':

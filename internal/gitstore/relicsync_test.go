@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -2211,4 +2212,47 @@ func relicLinesOf(listing string) string {
 		}
 	}
 	return strings.Join(kept, "\n")
+}
+
+// A remote that refuses a relic's leased checkpoint for a reason of its own is
+// reported in a relic's words. The task's words name `workbook compact
+// --adopt`, which takes no relic, so following them would fail.
+func TestRefusedRelicLeaseNamesNoTaskCommand(t *testing.T) {
+	t.Parallel()
+	const relicID = "WB-R-01M8EVZ9BQR7GNFYPYHSVT6FRC"
+	destination := relicRefPrefix + relicID
+	expected := map[string]string{destination: relicID}
+	forced := map[string]bool{destination: true}
+	for name, test := range map[string]struct {
+		reason string
+		want   string
+	}{
+		"a hook": {
+			reason: "[remote rejected] (pre-receive hook declined)",
+			want: "relic " + relicID + ": origin refused the compacted checkpoint ([remote rejected] (pre-receive hook declined)); " +
+				"the relic stays compacted here and unpublished until origin accepts it, or until origin's copy of the relic " +
+				"changes and the next sync drops this compaction",
+		},
+		"the remote moved on": {
+			reason: "[rejected] (stale info)",
+			want: "relic " + relicID + ": origin changed it since this clone compacted it, so the checkpoint was not published; " +
+				"the next sync keeps origin's history, with every change, and drops this compaction",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			output := "To origin\n!\tabc:" + destination + "\t" + test.reason + "\nDone\n"
+			got, err := parseLeasedPushPorcelain("origin", []byte(output), expected, forced, relicLeaseRefusedDetail, errors.New("exit status 1"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := got[relicID]
+			if result.Status != SyncRejected || result.Detail != test.want {
+				t.Errorf("result = %q %q, want rejected %q", result.Status, result.Detail, test.want)
+			}
+			if strings.Contains(result.Detail, "--adopt") || strings.Contains(result.Detail, "task") {
+				t.Errorf("the refusal speaks of a task: %q", result.Detail)
+			}
+		})
+	}
 }
