@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=v0.7.0-209-gdfbbd036 sha256=7ba4c41a507839d57085d423f54c76592c791bc65410195faea215e333b463d2 -->
+<!-- workbook:begin generator=v0.7.0-226-g7ad89db4 sha256=535a53698797f909f0aaf3c231d663fe654a4671671d854858252a944924f558 -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`
@@ -161,22 +161,36 @@ they show the relics this checkout holds. Run `workbook sync` or
 `workbook fetch` first to get the latest relics.
 
 To save, write the whole new body to a file and pass the version you read
-as `--base`. Two edits to the same body are never merged.
+as `--base`. Two edits to one body that changed different lines are
+merged, both when your `--base` is an older version and when a sync meets
+another clone's save. You have nothing to do then; the warning
+`relic-body-merged` says it happened. A save repeated from the version it
+replaced records nothing for the body and exits 0, so a retried save is safe;
+if the body was saved again in between, the repeat is merged or refused like
+any older save.
 
-A save whose `--base` is no longer the current version exits 6
-(`stale-write`) and writes nothing; repeating the identical command fails
-the same way. A sync that meets another clone's different edit of the same
-body exits 8 and reports it in the result envelope's `relicConflict` list:
-an entry of `type` `body` whose `body` carries `base`, `ours` and `theirs`,
-with your text kept at `parkedRef`. Other local changes the sync did not
-apply are listed in `unapplied`; make them again after saving the body.
-When a relic change exits 8 this way, it recorded nothing; run it again
-after you resolve the body.
+Edits to the same or adjacent lines, and a few other cases, are not merged.
+`workbook relic update` or the sync then exits 8 and reports each such part in
+the result envelope's `relicConflict` list: an entry of `type` `body` whose
+`body` carries `reason`, `base` (the text the save started from), `ours` (the
+saved text) and `theirs` (the text that stands), such as:
 
-On either, read the part again. When your intent is clear, apply your
-change to the current text and save with `--base` set to the current
-version. Otherwise show the user both versions and ask; never save over
-text you have not read.
+```json
+{"type":"body","part":"<part>","body":{"reason":"overlap","base":{"text":"Run it.\n"},"ours":{"text":"Run it by hand.\n"},"theirs":{"version":"<version>","text":"Run it nightly.\n"}}}
+```
+
+`base` is absent when the part had no body there, or a compaction dropped that
+version. A sync keeps your text at `parkedRef`, and lists other local changes
+it did not apply in `unapplied`; make them again after saving the body. A
+`relic update` that could not merge your file keeps nothing. When a relic change
+exits 8 this way, it recorded nothing, its other changes included; make it
+again after you resolve the body.
+
+When your intent is clear, combine your edit with the text of `theirs` and save
+with `--base` set to its `version`. Otherwise show the user both versions and
+ask; never save over text you have not read. A `--base` that is not a version of
+the part, or none for a part with a body, exits 6 (`stale-write`) and writes
+nothing; read the part again, because repeating the command fails the same way.
 
 To see what changed since the version you passed as `--base`, run
 `workbook relic diff <relic>#<part> <version> --json` with that version.
