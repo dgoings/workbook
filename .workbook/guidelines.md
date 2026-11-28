@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=v0.7.0-172-gfd3b76ca sha256=262fc462cead5268a70bfb139c217d0a6fb01765e60aeb77c66fa21801761326 -->
+<!-- workbook:begin generator=v0.7.0-192-g35896851 sha256=3270112c9b35d8a22f09894fe5ce692c1de7673a39e92b00d34779cd10233489 -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`
@@ -140,10 +140,16 @@ workbook relic update <relic> --part <part> --body-file <file> --base <version> 
 `workbook show` lists the task's links in `data.relics`: each entry names
 the `relic`, the `part` it links from (absent for a link from the whole
 relic) and the `rel`, such as `implemented-by`. `workbook relic list
---linked-to` lists the same relics. `workbook relic show` with a part and
+--linked-to` lists the same relics, without retired ones unless `--retired`
+is given. `workbook relic show` with a part and
 `--body` carries the body at `data.parts[0].body.text`, or at
 `data.parts[0].body.base64` when it is not text, and its version at
 `data.parts[0].body.version`.
+
+`workbook relic retire <relic>` marks a relic that is no longer in use, and
+`workbook relic unretire <relic>` takes the mark off; do either only when
+asked. A retired relic can still be read and changed. `workbook relic list`
+leaves it out, and its entry in `data.relics` has `retired` set to `true`.
 
 To see what links to a part, run `workbook relic list --linked-to
 <relic>#<part> --json`; `workbook relic show` of that part lists each link
