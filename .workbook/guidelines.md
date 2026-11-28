@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=v0.7.0-205-g5d620ee2 sha256=57ea93047476ce64e844340e94e2212f75114554c6fee3c176cf699960da0c7f -->
+<!-- workbook:begin generator=v0.7.0-209-gdfbbd036 sha256=7ba4c41a507839d57085d423f54c76592c791bc65410195faea215e333b463d2 -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`
@@ -236,8 +236,9 @@ no schema, and `workbook relic migrate <relic> --to plan` adopts the default.
 
 A relic save is checked against the schema version the relic names, and a
 refusal names the rule it broke. `workbook relic migrate <relic> --to <target>`
-moves a relic to a newer version, and `workbook relic list --behind` lists the
-relics behind. Each type below shows its newest version;
+moves a relic to a newer version (`<target>` is a number, a type, `<type>@<n>`
+or a built-in name), and `workbook relic list --behind` lists the relics
+behind. Each type below shows its newest version;
 `workbook schema show <type> --json` gives the full rules.
 
 - `plan`, built-in `workbook:plan:1`
