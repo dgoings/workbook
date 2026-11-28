@@ -2448,7 +2448,7 @@ func runServeWithEnvironment(
 			if err != nil {
 				return nil, err
 			}
-			return reader.List(requestContext, core.RelicListFilter{IncludeDeleted: true})
+			return reader.List(requestContext, core.RelicListFilter{IncludeDeleted: true, IncludeRetired: true})
 		},
 		ShowRelic: func(requestContext context.Context, id string, removed bool) (core.RelicDocument, error) {
 			reader, err := relicReads(requestContext)

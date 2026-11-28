@@ -600,6 +600,38 @@ func TestServeDamagedRelicIsReported(t *testing.T) {
 	}
 }
 
+func TestServeRelicListRetiredFilter(t *testing.T) {
+	t.Parallel()
+	repository := initializedRepository(t)
+	live := mustCreateRelic(t, repository, "Live", "--type", "paper")
+	retired := mustCreateRelic(t, repository, "Retired", "--type", "paper")
+	mustRelic(t, repository, nil, "retire", retired.Relic.ID)
+	address := startServeBoard(t, repository)
+
+	// listed is each listed relic's ID, with whether it is marked retired.
+	listed := func(path string) map[string]bool {
+		t.Helper()
+		var document webui.RelicsDocument
+		if err := json.Unmarshal([]byte(mustJSON(t, boardJSON(t, address, path))), &document); err != nil {
+			t.Fatalf("decode GET %s: %v", path, err)
+		}
+		found := map[string]bool{}
+		for _, summary := range document.Relics {
+			found[summary.ID] = summary.Retired
+		}
+		return found
+	}
+	for path, want := range map[string]map[string]bool{
+		"/api/relics":                 {live.Relic.ID: false},
+		"/api/relics?retired=include": {live.Relic.ID: false, retired.Relic.ID: true},
+		"/api/relics?retired=only":    {retired.Relic.ID: true},
+	} {
+		if got := listed(path); !reflect.DeepEqual(got, want) {
+			t.Errorf("GET %s lists %v, want %v", path, got, want)
+		}
+	}
+}
+
 func TestServeRelicBodyOpensFromTheRepository(t *testing.T) {
 	t.Parallel()
 	repository := initializedRepository(t)
