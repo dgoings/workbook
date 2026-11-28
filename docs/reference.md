@@ -664,8 +664,8 @@ synchronization a task command runs carries none; see
 and `plan` types have [built-in schemas](#built-in-schemas), and a project can
 save a [schema](#relic-schemas) of its own for any relic type. A relic can be
 [retired](#retiring-a-relic), and `workbook compact --relics` can
-[compact](#compacting-relics) retired and deleted relics. There is no web page
-for relics yet.
+[compact](#compacting-relics) retired and deleted relics.
+[The web board](#relics-on-the-board) shows relics and changes none.
 
 **Upgrade every Workbook on the machine before creating relics.** A Workbook
 from before relics does not know the refs that hold them. Its `workbook reset
@@ -2651,6 +2651,13 @@ while such work exists, as it is for a task; see
 `workbook reset --remote` deletes the relic refs at a remote with the rest of
 its Workbook refs, after writing them to its bundle. A compacted relic's ref is
 an ordinary relic ref to a reset.
+
+**`workbook serve`** shows relics on the web board, read only; see
+[Relics on the board](#relics-on-the-board). Loading a relic page or calling a
+relic route fetches nothing, pushes nothing and moves no ref. The board's own
+background synchronization, which `serve` runs while no `workbook sync --watch`
+is running, carries relics as that command does; see
+[Sharing relics](#sharing-relics).
 
 **Task commands** do not return relics. `workbook list` and `next` read no
 relic, `workbook show <task>` lists the relics that link to the task, retired
@@ -7807,7 +7814,8 @@ PATCH /api/display                       record the project's name and colors;
                                          changed is recorded
 GET /api/tasks/<id>            the task as `workbook show --json` gives it, for
                               the request's person, without the `relics` that
-                              link to it
+                              link to it; those are at
+                              `/api/tasks/<id>/relics`
 GET /api/tasks/<id>/history   versioned change log and status lifecycle JSON
 POST /api/tasks               create a task
 PATCH /api/tasks/<id>         update task fields
@@ -7836,6 +7844,23 @@ GET /api/sync                 versioned publication-mode JSON, reporting the
                               mode, whether a watcher answers, and a `reason` of
                               `no-watcher` or `no-origin` when none does
 PUT /api/sync                 change this board's publication mode
+GET /relics                   relic list shell; client-rendered. This and the
+                              relic routes below are described under Relics on
+                              the board
+GET /relics/<id>              relic page shell
+GET /relics/<id>/parts/<part> the relic page shell, at one part
+GET /relics/<id>/history      relic history shell
+GET /relics/<id>/diff         relic diff shell
+GET /relics/<id>/parts/<part>/body
+                              one part's current body by itself, under a
+                              sandbox content policy
+GET /api/relics               versioned relic list JSON
+GET /api/relics/<id>          versioned JSON of one relic, without body text
+GET /api/relics/<id>/parts/<part>
+                              versioned JSON of one part, with its body
+GET /api/relics/<id>/history  versioned relic history JSON
+GET /api/relics/<id>/diff     versioned relic diff JSON
+GET /api/tasks/<id>/relics    versioned JSON of the relics linked to a task
 GET /healthz                  versioned health JSON
 GET /manifest.webmanifest     web manifest naming the board for a home-screen
                               shortcut; see On a phone
@@ -8365,6 +8390,279 @@ itself, so it stays until dismissed, or until a manual `workbook compact` or
 `workbook compact --adopt <id> --discard-local` in the serving checkout drops
 it, after writing it to the backup bundle unless told `--no-backup`.
 
+### Relics on the board
+
+The board shows [relics](#relics) and changes none. The header's **Relics** link,
+between **Board** and **Config**, opens them. Relics are changed with the
+`workbook relic` commands, and each relic page says so under its title. The relic
+pages fit a phone as they fit a desktop window.
+
+#### Relic pages
+
+| Address | Shows |
+| --- | --- |
+| `/relics` | The list. `?type=<type>` keeps one type, `?retired=1` adds retired relics and `?deleted=1` adds deleted ones. |
+| `/relics/<id>` | One relic and its parts. `?removed=1` also shows removed parts. |
+| `/relics/<id>/parts/<part>` | The same page, scrolled to that part and marked with `aria-current="true"`. `?removed=1` as above. |
+| `/relics/<id>/history` | The changes to the relic. `?part=<part>` lists one part's, and `?all=1` lists every change. |
+| `/relics/<id>/diff` | A comparison. `?from=<version>`, `?to=<version>` and `?part=<part>` say what is compared, as for [`relic diff`](#comparing-two-points). |
+
+`<id>` and `<part>` may be unique prefixes. Once the board has answered, the
+page replaces a prefix in the address with the full ID, so a copied address names
+full IDs.
+
+**The list** shows each relic's title, type, ID, number of live parts, time of
+the newest change, and a `Retired` or `Deleted` badge. Its controls are a
+**Type** chooser and the **Show retired** and **Show deleted** boxes. Each change
+of a control is a new address, so Back walks them.
+
+**A relic page** shows, in order: the title, a **History** link and any badges;
+`Type`, `ID` (with a control that copies it), `Author`, `Created`, `Updated`,
+`Schema` and `Conformance`; the properties; the relic's own links; the links to
+the whole relic, under **Linked from**; a contents list; and every part.
+
+- `Schema` reads `<type> version <n>` for a project's schema version,
+  `<type> <id>` for a built-in or a version whose number this checkout does not
+  know, and `open` for a relic that names none.
+- `Conformance` reads `conforms`, `does not fit its schema: <problem>` or
+  `unknown schema`, and is left out for an open relic; see
+  [Conformance](#conformance).
+- A part's caption is its `heading` field when that is a non-empty string,
+  otherwise its `title` field, otherwise its type. Under the caption are its
+  type, ID, a `Removed` badge when it is removed, its fields, its links, the
+  links to it under **Linked from**, **History of this part**, its body and
+  **Open in new tab**.
+- Every property, field and pointer member is a labelled value. A string is
+  drawn as its characters, a number, boolean or `null` as JSON, and an array or
+  object as indented JSON. A `<dl>` holds them in name order.
+- A part prefix that matches no part on the page, or more than one, shows
+  `No part <part> in this relic.` A removed part is on the page only with
+  `?removed=1`; a link to a removed part adds it.
+
+**Content is drawn as text.** Everything a relic holds was written by whoever
+changed it, so the page never reads any of it as markup. Direction controls are
+drawn as spaces, as [elsewhere on the board](#local-web-board). A body is drawn
+by its format label, compared without regard to case:
+
+| Body | Drawn as |
+| --- | --- |
+| `md` or `markdown` | The board's [Markdown subset](#markdown-in-descriptions-and-comments), and also pipe tables, which task descriptions and comments do not draw. Every image is drawn as its text. |
+| `html` or `htm` | Its source, labelled `HTML, shown as source`. Stored HTML is never run inside the board. |
+| Any other UTF-8 text | Preformatted text. |
+| Not UTF-8 | `not text, <size>`. No byte of it is drawn. |
+
+**Links** are followed from both ends. A link out reads `<rel> → <target>`. A
+task target opens the task's page, and also shows the task's title when the board
+has read that task by the time the relic page is drawn. A relic or part target
+opens its relic page. A target that is not live is marked `(removed)`,
+`(deleted)`, `(not in this checkout)` or `(retired)`, and one that is not in
+this checkout is text, with no link. A link from a part is listed under that
+part. Under **Linked from**, a link in reads the linking relic's title, ` · ` and
+the part's type when it is from a part, then the relationship, and opens the
+relic or part it is from. A link into a part is listed under that part. Each link
+shows its [pointer](#pointers) when it has one.
+
+**History** lists the changes newest first, each with its time, who recorded it,
+its summary and one line per operation. An operation's line names what it
+touched; it does not show old or new property or field values, which the diff
+does. The view asks for the newest 100 changes, says `Showing <n> of <total>
+changes.`, and offers **Show all** (`?all=1`).
+
+- Each row with an older row below it has **Compare with the change before**.
+- The oldest row listed has **Compare with the newest** instead.
+- A relic or part with only one change, never compacted, has **Show this
+  change**.
+- With two rows or more, **From** and **To** buttons pick any two. The diff
+  opens once both are picked.
+- A [compacted](#after-a-compaction) relic's checkpoint is the oldest row, with
+  the date of the compaction and how many changes were dropped and from when. It
+  appears once every later change is listed.
+- A history that stops at a change it cannot read says where it stopped and why.
+
+**A diff** is drawn from the [diff document](#comparing-two-points); the page
+computes none of its own. It shows the two points, then the relic's changed
+members and properties as **Before** and **After**, each changed part with its
+fields and body, and the links added and removed. A part that moved reads
+`moved from <index> to <index>`, counting live parts from 0. A body's hunks are
+side by side in a window at least 900px wide and inline below that. In a wide
+window, **Side by side** and **Inline** switch between them; the browser
+remembers the choice for that viewer, and a browser that refuses storage forgets
+it on reload. Removed and added lines carry `-` and `+` as well as color. A
+line with no final newline says `No newline at end`, an approximate diff says so,
+and a body that is not text shows only the two sizes. When nothing differs the
+page says `These two versions hold the same relic.` or `… the same part.`
+
+**A task's page** has a **Relics** section under its comments when a relic links
+to the task. Each row has the relic's title, which opens the relic or the part
+the link is from, the relationship, the relic's type, `part: <type>` for a link
+from a part, and a `Retired` badge on a retired relic. The section is read once,
+when the task's page opens. A link made while the page is open appears the next
+time it is opened. With no link to list, the section stays hidden, and any
+warning about relics that could not be read is not shown. A read that fails shows
+the section with the server's message.
+
+**Failures.** An address that names no relic shows `No relic <id> in this
+checkout.` A history or diff address that cannot be answered shows
+`History unavailable` or `Changes unavailable` with the server's message, which
+says whether the relic, the part or the version is missing. Any other failure
+shows the server's message; for a [damaged relic](#a-damaged-relic) it names the
+relic, and the list fails as `relic list` does. A body that cannot be read marks
+only its own part.
+
+**Freshness.** A relic view reads when it is opened, and again when its browser
+tab becomes visible. The list, a history and a diff are redrawn when the answer
+changed. A relic page is redrawn when the relic, its links in or out, the state
+of a link's target or a warning changed, and then brings the part named in its
+address back into view. Relic views take no
+part in the board's once-a-second task poll. The pages show the relics this
+checkout holds. No page load or relic route fetches them. They arrive when this
+checkout synchronizes relics, which includes the board's own background
+synchronization; see [Sharing relics](#sharing-relics). The list page suggests
+`workbook sync`.
+
+**Large relics.** The relic read carries no body text. The page draws every
+part's caption and fields, and reads a body when its part comes within one screen
+of what is visible, at most four at a time and each once per visit to the page.
+
+#### Relic routes
+
+Each relic route answers `GET` alone. Another method, `HEAD` included, is
+answered `405` with `Allow: GET`, after the [checks every request
+passes](#local-web-board). A path segment under `/api/relics/`, or in a body
+address, that is empty, `.`, `..` or holds `#` is answered `404`, and so is
+`/api/tasks/<id>/relics` with an `<id>` that is empty, `.` or `..`. The routes
+read through the [relic index](#the-relic-index), and from Git when the index
+cannot be used.
+
+Each JSON answer is `application/json; charset=utf-8` with `format` and
+`version: 1`.
+
+| Route | Query | `format` | Other members |
+| --- | --- | --- | --- |
+| `/api/relics` | `type`; `retired` and `deleted`, each `include` or `only` | `workbook.relics` | `relics`, `types` |
+| `/api/relics/<id>` | `removed=include` | `workbook.relic-view` | `relic`, `warnings` |
+| `/api/relics/<id>/parts/<part>` | | `workbook.relic-part` | `relic`, `head`, `part` |
+| `/api/relics/<id>/history` | `part`; `limit`, a whole number of 1 or more, 100 by default; `all=1` | `workbook.relic-history` | `history` |
+| `/api/relics/<id>/diff` | `part`; `from`, `to`; `context`, `0` to `1000` or `all`, 3 by default | `workbook.relic-diff` | `diff` |
+| `/api/tasks/<id>/relics` | | `workbook.task-relics` | `task`, `relics`, `warnings` |
+
+A query parameter given with an empty value counts as absent. A value other than
+those listed for `retired`, `deleted`, `removed`, `limit`, `all` or `context` is
+`400` `validation`, and so is `to` without `from`.
+
+**`workbook.relics`.** `relics` lists relics in the order and with the members of
+[`relic list --json`](#listing-relics). By default it holds neither retired nor
+deleted relics. `retired=include` adds retired ones and `retired=only` keeps only
+them; `deleted` does the same for deleted ones. Both filters apply, so a relic
+that is both is listed only when both parameters keep it. `type` keeps the relics
+of exactly that type. `types` is the sorted types of the relics the `retired` and
+`deleted` filters keep, whatever `type` says. Both are `[]` when empty.
+
+```json
+{"format":"workbook.relics","version":1,"relics":[{"id":"WB-R-01M8GCPSV9ZX5ZDBJM8FP5BPDY","head":"0b1bf8ce6c209a46b2e5681015a022512007a365","title":"Task archive compaction","type":"spec","schema":{"type":"spec","id":"workbook:spec:1","builtIn":true},"conformance":"conforms","author":"alice@example.com","retired":false,"deleted":false,"compacted":null,"createdAt":"2026-11-28T06:15:30.921251Z","updatedAt":"2026-11-28T06:15:37.128475Z","parts":1}],"types":["spec"]}
+```
+
+**`workbook.relic-view`.** `relic` is [the relic document](#the-relic-document)
+as `relic show --json` gives it, `targetState`, `targetRemoved` and
+`linkedFrom` included, with `removed=include` doing what `--removed` does. A body
+has `format`, `version` and `bytes`, and never `text` or `base64`. `warnings`,
+each with `code` and `message`, is left out when there is none.
+
+**`workbook.relic-part`.** `relic` is the full relic ID, `head` the commit the
+part was read at, and `part` one entry of the relic document's `parts`, with the
+body's `text`, or `base64` when it is not UTF-8. A removed part is answered too.
+The answer carries no links and no `linkedFrom`; `/api/relics/<id>` has them.
+
+```json
+{"format":"workbook.relic-part","version":1,"relic":"WB-R-01M8GCPSV9ZX5ZDBJM8FP5BPDY","head":"0b1bf8ce6c209a46b2e5681015a022512007a365","part":{"id":"01M8GCPZBXM0N5XKPE5F7BG5VG","type":"section","position":"1/1","fields":{"title":"Goals"},"body":{"format":"md","version":"01M8GCPZBXM0N5XKPE5F7BG5VG","bytes":24,"text":"# Goals\n\nKeep it small.\n"}}}
+```
+
+**`workbook.relic-history`.** `history` is the `data` of [`relic show
+--history --json`](#listing-history): `relic`, `part`, `total`, `showing`,
+`changes` (oldest first), `bodyVersions`, `compacted` and `truncated`, as
+described there. With `part` it is that part's history.
+
+**`workbook.relic-diff`.** `diff` is the `data` of [`relic diff
+--json`](#comparing-two-points), with the members described there. `from` and `to`
+are versions: neither, `from` alone, or both.
+
+**`workbook.task-relics`.** `task` is the task ID exactly as the path gave it, so
+a prefix stays a prefix. `relics` is the `relics` of [`workbook show <task>
+--json`](#links), with `relic`, `title`, `type`, `link` and `rel`,
+`part` and `partType` for a link from a part, and `retired` on a retired relic.
+It is `[]` when nothing links to the task. A relic that cannot be read is a
+`relic-links-unread` entry in `warnings`. A task that does not exist is `404`
+`not-found`.
+
+```json
+{"format":"workbook.task-relics","version":1,"task":"WB-01M8GCPSJ78EC7T1JTGMMSGFXQ","relics":[{"relic":"WB-R-01M8GCPSV9ZX5ZDBJM8FP5BPDY","title":"Task archive compaction","type":"spec","link":"01M8GCPZX8H5TBNNJ21BTJVH5B","rel":"implemented-by"}]}
+```
+
+A failed read is a `workbook.error` document with the status the board uses for
+its category: `404` `not-found` for a relic, part or version there is none of,
+`400` `validation` for a prefix that matches more than one, `409` `newer-writer`
+for a diff that meets a change a newer Workbook wrote, and `500` `corrupt-data`
+for a damaged relic. A [hosted board](#behind-a-sign-in-proxy) replaces the
+server's own words with a reference, as it does for tasks.
+
+#### A body in its own tab
+
+**Open in new tab** opens `GET /relics/<id>/parts/<part>/body`, which answers
+the part's current body by itself:
+
+| Body | `Content-Type` | `Content-Disposition` |
+| --- | --- | --- |
+| UTF-8, labelled `html` or `htm` | `text/html; charset=utf-8` | `inline` |
+| Any other UTF-8 | `text/plain; charset=utf-8` | `inline` |
+| Not UTF-8, whatever its label | `application/octet-stream` | `attachment`, named `<part>.<format>`, or `<part>.bin` with no label |
+
+Every such answer also has these headers:
+
+```http
+Content-Security-Policy: sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; form-action 'none'; base-uri 'none'; frame-ancestors 'none'
+X-Content-Type-Options: nosniff
+Referrer-Policy: no-referrer
+ETag: "01M8GCPZBXM0N5XKPE5F7BG5VG"
+Content-Length: 24
+```
+
+`ETag` is the body's version. The route does not answer `304`. A part with no
+body, a [stub](#stubs-parts-whose-content-was-dropped) included, is `404`
+`part <part> of relic <id> has no body`.
+
+An HTML body is drawn as a page and its inline scripts run. What it cannot do is
+**the browser's sandbox's guarantee, not Workbook's**. Workbook sends the headers
+and does not inspect or filter the body. A browser that enforces them:
+
+- gives the document an opaque origin, so it cannot read the board's storage or
+  cookies, or any answer from the board;
+- refuses it `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource` and beacons;
+- loads no external script, style, image, font, media or frame: inline script and
+  style run, and images, fonts and media load only from `data:` addresses;
+- lets it submit no form and open no window, and lets no page frame it.
+
+The board's link also carries `rel="noopener noreferrer"`, so the body gets no
+handle on the board's tab. Should a request from the body reach the board with
+`Origin: null`, the board refuses it `403`.
+
+What this does not cover, so treat it as best effort:
+
+- A script may still navigate its own tab, to the board or to any other site. It
+  cannot read what the board answers, and no board `GET` changes anything, but
+  another site learns that the request was made, from where, and whatever the
+  script put in its address.
+- A content policy does not govern every way a browser reaches the network;
+  WebRTC is one it does not.
+- Only headless Chrome has been tested.
+
+A body that is not UTF-8 is saved as a file under its format label, with path
+separators, control characters and direction overrides replaced by `_`. The label
+is whatever the writer chose, so it may be `html` or `exe`. **A file opened from
+disk is outside the sandbox.**
+
+In the Workbench desktop app, **Open in new tab** opens the body in the
+computer's default browser rather than in the app.
+
 ### Behind a sign-in proxy
 
 Two options let one board serve a team from behind a sign-in proxy such as
@@ -8413,7 +8711,15 @@ server's own words out of what it answers:
   recorded on the server, but publishing it to the shared repository did not
   finish. The server's log has the detail under reference <id>.`, and
   `projection-update-failed` and `docs-refresh-incomplete` read the same way
-  for the server's index of tasks and the generated guidelines.
+  for the server's index of tasks and the generated guidelines. On the relic
+  routes, `relic-links-unread` reads `A relic cannot be read, so some links may
+  be missing from this answer.` and `relic-link-targets-unread` reads `What
+  this relic's links point at could not be checked.`, each followed by the
+  reference sentence.
+- A relic history that stops early at a change it cannot read has its
+  `truncated.message` replaced with `The history cannot be read past this
+  change. The server's log has the detail under reference <id>.` The message
+  about a change a newer Workbook wrote is Workbook's own and is kept.
 - The detail goes to `serve`'s standard error as one line,
   `workbook serve: reference <id>: <detail>`, so whoever runs the server finds
   it from the reference a person reports. The reference is twelve random
@@ -8515,6 +8821,20 @@ Read:
   edited or removed — an old title, a rewritten comment — stays readable here.
 - `GET /api/tasks/<id>/attachments/<aid>`: the bytes of any attached file still
   live on its task.
+- `GET /relics`, `/relics/<id>` and the pages under it, with `GET /api/relics`
+  and `/api/relics/<id>`: every relic this checkout holds, deleted and retired
+  ones included — titles, types, properties, parts (removed ones included) and
+  their fields, links with their pointers, and the email address of whoever
+  created each relic.
+- `GET /api/relics/<id>/parts/<part>` and
+  `/relics/<id>/parts/<part>/body`: the current body of any part, removed parts
+  included, as JSON or opened by itself.
+- `GET /api/relics/<id>/history` and `/diff`: every recorded change to a relic
+  that its history still holds, each with the email address of whoever recorded
+  it, the old and new titles, properties and fields, and every older text of
+  every body. Text that was edited or removed stays readable here.
+  [Compaction](#compacting-relics) is what drops it.
+- `GET /api/tasks/<id>/relics`: the relics that link to a task.
 - `GET /api/vocabulary`: the project's statuses, priorities, keys and display
   settings, with the configuration head.
 - `GET /api/sync`: whether an `origin` is configured and whether a sync watcher
@@ -8522,6 +8842,9 @@ Read:
 - `GET /healthz`: that the board is up.
 - `GET /manifest.webmanifest`: the project's display name. The icons it names
   are the same for every board.
+
+Nothing about a relic can be written through the board. Every relic route
+answers `GET` alone.
 
 Write, all of it published to `origin` like any other change:
 
@@ -8657,7 +8980,7 @@ all, those untouched fields are the last successful poll's rather than the
 server's, and the message says the board could not be refreshed instead of
 claiming otherwise.
 
-The board header keeps its two route links — Board and Statuses — on the left
+The board header keeps its route links — Board, Relics and Config — on the left
 beside the title, and its settings on the right, so a link is in the same place
 on every route even though the settings a route offers are not. Each setting is
 a switch: words that say what the next flip does, then a track whose knob and

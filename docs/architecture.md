@@ -737,6 +737,35 @@ only the part objects whose IDs differ between them are opened, so equal
 `fields.json` or `body` object IDs cost no read. A line diff is computed on each
 run and bounded; see [History and diffs](reference.md#history-and-diffs).
 
+#### Relics on the web board
+
+The board's relic pages and routes only read. A page or an API call takes one
+path:
+
+```text
+GET /api/relics/<id>  ->  RelicService (built for the request, no actor)
+                          ->  the relic index in SQLite
+                              ->  Git, when the index cannot answer
+```
+
+The service is the one `relic show`, `list`, `diff` and history use, under the
+keys and relic schemas of the configuration the request resolved. A list reads
+index rows. The relic read sends no body text, and each body is read with its one
+part. No relic route fetches, pushes or moves a ref; the board's background
+synchronization is a separate loop, the one `sync --watch` runs.
+
+A body opened by itself is somebody else's document served from the board's
+address. Its content policy sandboxes it, so the browser gives it an opaque
+origin, apart from the board's, and refuses it fetches, sockets and remote
+resources:
+
+```http
+Content-Security-Policy: sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; form-action 'none'; base-uri 'none'; frame-ancestors 'none'
+```
+
+The isolation is the browser's, and it does not stop the document navigating its
+own tab. See [A body in its own tab](reference.md#a-body-in-its-own-tab).
+
 #### Compacted relics
 
 `workbook compact --relics`, run by hand, replaces the history of a retired or

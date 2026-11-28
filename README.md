@@ -184,8 +184,8 @@ and is not a security boundary; see
 deleted relics with one checkpoint each, after saving it to a backup bundle,
 and keeps every link into them resolving; see
 [Compacting relics](docs/reference.md#compacting-relics).
-Relics are not on the board. Upgrade every Workbook on a machine before
-creating relics there,
+[The web board](docs/reference.md#relics-on-the-board) shows relics, read only.
+Upgrade every Workbook on a machine before creating relics there,
 because a `workbook reset` run by a Workbook from before relics can lose a
 change not yet published. See [Relics](docs/reference.md#relics).
 
@@ -276,6 +276,13 @@ shortcut", which opens the board in a Chrome tab. On an iPhone or iPad from vers
 its own window with its own sign-in unless "Open as Web App" is switched off
 when adding it; switch it off to have it open in the browser. Neither has been tried
 on a real phone. See [On a phone](docs/reference.md#on-a-phone).
+
+The board's **Relics** page lists the project's relics and shows each one with
+its parts, links, history and diffs, and a task's page lists the relics that link
+to it. All of it is read only. **Open in new tab** shows one body by itself under
+a browser sandbox, which keeps an HTML body's scripts from reading or changing
+the board; a file saved from there and opened from disk has no such protection.
+See [Relics on the board](docs/reference.md#relics-on-the-board).
 
 Any board, hosted or not, shows an edit its sync had to set aside because a
 conflicting change reached the remote first: the card says so, and the task's

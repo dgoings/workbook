@@ -1368,3 +1368,41 @@ func TestRelicCreateFromFileReadsABoundedDocument(t *testing.T) {
 		t.Fatalf("a document exactly at the limit created %q", created.Relic.Title)
 	}
 }
+
+// The board's relic routes and the headers of a body opened by itself are read
+// from the board's own source, so a route or a header added there fails here
+// until the reference states it.
+func TestDocsDocumentRelicsOnTheBoard(t *testing.T) {
+	t.Parallel()
+	reference := repositoryDoc(t, "docs", "reference.md")
+	section := docSection(reference, "### Relics on the board")
+	if section == "" {
+		t.Fatal("docs/reference.md has no \"### Relics on the board\" section")
+	}
+
+	registered := regexp.MustCompile(`HandleFunc\("([A-Z]+) ([^"]*relics[^"]*)"`).
+		FindAllStringSubmatch(repositoryDoc(t, "internal", "webui", "handler.go"), -1)
+	if len(registered) == 0 {
+		t.Fatal("found no relic route in internal/webui/handler.go")
+	}
+	placeholders := strings.NewReplacer("{", "<", "}", ">")
+	for _, route := range registered {
+		method, path := route[1], placeholders.Replace(route[2])
+		// A line of the route list under "## Local web board".
+		listed := regexp.MustCompile(`(?m)^` + method + ` +` + regexp.QuoteMeta(path) + `(\s|$)`)
+		if !listed.MatchString(reference) {
+			t.Errorf("the reference's route list is missing %q", method+" "+path)
+		}
+	}
+
+	headers := regexp.MustCompile(`header\.Set\("([^"]+)"`).
+		FindAllStringSubmatch(repositoryDoc(t, "internal", "webui", "relicbody.go"), -1)
+	if len(headers) == 0 {
+		t.Fatal("found no response header in internal/webui/relicbody.go")
+	}
+	for _, header := range headers {
+		if !strings.Contains(section, header[1]) {
+			t.Errorf("the reference's \"### Relics on the board\" is missing the header %q", header[1])
+		}
+	}
+}

@@ -38,6 +38,16 @@ every Workbook on a machine before creating one; see Compatibility across
 versions below.
 
 ### Added
+- **Relics on the web board.** `workbook serve`, and the desktop app that loads
+  it, show a list of relics filtered by type, retired and deleted; a page for
+  each relic with its parts, links both ways, history and diffs; and a
+  **Relics** section on the page of a task that relics link to. All of it is read
+  only, and whoever can open the board can read every relic, deleted and retired
+  ones included, with older body texts and authors' email addresses. **Open in
+  new tab** shows one body by itself under a sandbox content policy. The same
+  data is at new `GET` routes under `/api/relics` and at
+  `/api/tasks/<id>/relics`, as versioned JSON. See
+  [Relics on the board](docs/reference.md#relics-on-the-board).
 - **Built-in schemas for specs and plans.** Every project, new or upgraded, has
   `workbook:spec:1` and `workbook:plan:1` with no setup. A new `spec` or `plan`
   relic names the built-in and is checked against it: both require a `status`
@@ -238,6 +248,7 @@ versions below.
   benchmarks](docs/architecture.md#relic-benchmarks).
 
 ### Changed
+- The board's header has a **Relics** link between **Board** and **Config**.
 - **New `spec` and `plan` relics are checked.** `relic create <title> --type spec`
   alone is now refused, exit 5, because the built-in requires `status`; add `--set
   status=draft`. `relic list --behind` lists every earlier `spec` and `plan`
