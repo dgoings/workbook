@@ -38,6 +38,24 @@ every Workbook on a machine before creating one; see Compatibility across
 versions below.
 
 ### Added
+- **Built-in schemas for specs and plans.** Every project, new or upgraded, has
+  `workbook:spec:1` and `workbook:plan:1` with no setup. A new `spec` or `plan`
+  relic names the built-in and is checked against it: both require a `status`
+  property, and every part needs a `title`. A project that saves its own schema
+  for a type takes over for new relics, and relics already on the built-in keep
+  it. `schema list` and `schema show` show built-ins, with `builtIn` in JSON, and
+  `relic migrate --to` takes a built-in's name. Existing relics stay open until
+  `relic migrate <relic> --to spec` adopts one. See
+  [Built-in schemas](docs/reference.md#built-in-schemas).
+- **Relationship names.** Workbook knows `implemented-by`, `derived-from`,
+  `summarizes`, `decided-in`, `changes`, `supersedes` and `relates-to`, and a
+  schema's `links.relationships` adds names. The generated guidelines list them
+  and show how to write a spec and a plan. Run `workbook docs update` to
+  refresh them. See
+  [Relationship names](docs/reference.md#relationship-names).
+- **Properties when creating a relic.** `relic create --set <name>=<value>` and
+  `--set-json <name>=<json>` set properties, as on `relic update`; they cannot be
+  combined with `--from-file`.
 - **Retiring a relic.** `workbook relic retire <relic>` and `relic unretire`
   record a reversible mark. `relic list --retired` and `--all` show retired
   relics, and `workbook show <task>` lists the links of a retired relic marked
@@ -220,6 +238,19 @@ versions below.
   benchmarks](docs/architecture.md#relic-benchmarks).
 
 ### Changed
+- **New `spec` and `plan` relics are checked.** `relic create <title> --type spec`
+  alone is now refused, exit 5, because the built-in requires `status`; add `--set
+  status=draft`. `relic list --behind` lists every earlier `spec` and `plan`
+  relic that names no schema.
+- **A new link's `--rel` is checked.** It must be one of the relationship names,
+  or one the relic's schema adds, or `relic update --link` refuses it with exit
+  5. Links already held under other names stay readable.
+- **`relic migrate` and `conformance` judge links** as well as properties and
+  parts: each link's relationship, then its pointer, including links from removed
+  parts. A relic under a schema that holds another relationship name reads
+  `not-conforming`.
+- **The cache moves to schema version 14**, which is rebuilt once, because stored
+  judgments now cover links and built-ins.
 - **A move concerns this project's refs only.** A task or relic ref at the old
   place whose name is not one of this project's task or relic IDs, under any
   key it has had, is another project's or no project's, and `workbook
@@ -261,6 +292,13 @@ versions below.
   still reads the settings, tasks and statuses, and is told to upgrade when it
   tries to change a status, a priority, a key or another setting kept there.
   Upgrade every clone before saving a schema.
+- **A relic written under a built-in schema needs a build with this change to be
+  changed.** It is written at writer-format generation 8. A build from before the
+  built-ins reads it, refuses to change it as `newer-writer` and never pushes
+  over it; such a build creates `spec` and `plan` relics as open
+  ones. v0.7.0 and earlier never fetch relics.
+- **Releases can disagree about `--behind`.** A later release can add a newer
+  built-in, and a relic on the older one is behind only for whoever runs it.
 - **A Workbook from before relics works beside them otherwise.** v0.6.1 and
   v0.7.0 read, change and synchronize tasks in a checkout that holds relics,
   and leave the relics at a remote alone.

@@ -169,6 +169,8 @@ version they read; see [Relics for agents](docs/reference.md#relics-for-agents).
 `workbook relic show <relic> --history` lists the changes to a
 relic or one of its parts, and `workbook relic diff <relic>` compares two of
 its versions; see [History and diffs](docs/reference.md#history-and-diffs).
+The `spec` and `plan` types each have a [built-in schema](docs/reference.md#built-in-schemas),
+so every project checks them with no setup until it saves its own.
 A project can give a relic type a versioned schema with `workbook schema put
 <type> <file>`, and a relic save is then checked against the version the relic
 names; `workbook relic migrate <relic> --to <target>` moves it to another, and

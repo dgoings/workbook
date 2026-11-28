@@ -109,7 +109,7 @@ the guidelines list, or one the relic's schema adds in `links.relationships`.
 A save is checked against the version the relic names, and a refusal names the
 rule it broke: change the input rather than retrying. Read the full rules with
 `workbook schema show <type> --json`. To move a relic to a newer version, run `workbook relic migrate <relic> --to <target>`, where the
-target is a version number, a type or `<type>@<number>`.
+target is a version number, a type, `<type>@<number>` or a built-in schema's name.
 
 For other edits (the title, a property or field, or adding, moving, removing or
 restoring a part), run `workbook relic update --help`; for export, see

@@ -856,7 +856,48 @@ meets rule 4 and stops the move while it copies, before anything is marked.
 
 ### Relic schemas
 
-A [relic schema](reference.md#relic-schemas) is a project setting. Saving a
+A [relic schema](reference.md#relic-schemas) is either a project schema, kept in
+the project settings, or a [built-in](reference.md#built-in-schemas).
+
+**Built-in schemas.** `workbook:spec:1` and `workbook:plan:1` are JSON files in
+`internal/core/relicschemas/`, embedded in the program and compiled once, through
+the same checker as a saved schema. A built-in's name is `workbook:<type>:<n>`, a
+form no ULID can take. It is never written to the configuration history: no
+`schema.put`, checkpoint or listing holds one, and a stored listing that names one
+is corrupt data. The relic service and the index add the built-ins beside the
+settings' listing, where a type's newest version is the project's, or the
+built-in when the project has none. One read path returns a built-in from the
+program and a project version from Git. A released built-in never changes, and a
+test pins each stored document's hash; a later release adds
+`workbook:<type>:<n+1>`.
+
+A relic names a built-in in the same `schema` member that names a project
+version, and nothing else records it:
+
+```text
+refs/workbook/relics/<relic-id>  →  commit C2 (parent C1)
+  tree: operation.json  [relic.migrate → workbook:spec:1, minReader 8]
+        state.json      (schema "workbook:spec:1", minReader 8)
+        links.json, parts/…  (unchanged)
+refs/workbook/config      (untouched: no schema.put, no listing entry)
+```
+
+```json
+{"id":"01MC…C","type":"relic.create","relic":{"title":"Archive compaction","type":"spec","schema":"workbook:spec:1"}}
+{"id":"01MC…M","type":"relic.migrate","relicType":"spec","schema":"workbook:spec:1"}
+```
+
+A pack whose `relic.create` or `relic.migrate` names a built-in declares
+generation 8, and a state whose `schema` is a built-in declares at least 8. A
+state keeps the larger of its parent's generation and its pack's, so it stays 8
+after a later migration to a project version. A pack or state that names a
+built-in below generation 8 is corrupt data. A
+[checkpoint](#compacted-relics) keeps the relic's schema name: its pack declares
+7, and its state 8 when the tip it replaced did. A later built-in version needs
+no new generation, since any well-formed name is valid stored data, including one
+this build does not ship.
+
+**Project schemas.** Saving a
 version is one `schema.put` operation in the configuration history, and the
 stored schema document is a blob in the tree of the commit that adds it, as a
 task attachment is stored:
@@ -918,7 +959,8 @@ C1 operation.json  [relic.create … "type":"spec","schema":"<version 1 ID>"]
 C3 operation.json  [relic.migrate "relicType":"spec","schema":"<version 2 ID>"]
 ```
 
-The writer holds `create`, `update` and `migrate` to the schema; see
+The writer holds `create`, `update` and `migrate` to the schema, relationship
+names and link pointers included; see
 [When a relic is checked](reference.md#when-a-relic-is-checked). The fold, a
 fetch, a replay and `validate` never do, so edits that were each allowed can
 meet in a relic that does not fit its version. Such a relic is kept, read and
@@ -1248,12 +1290,14 @@ than per release:
 | 5 | `field.set` of `due`, and a `task.create` or `history.checkpoint` whose task carries a due date |
 | 6 | `schema.put`, and these relic operations: `relic.migrate`, `relic.create`, `title.set`, `relic.tombstone`, `relic.restore`, `property.set`, `property.clear`, `part.add`, `part.field.set`, `part.field.clear`, `part.body.set`, `part.move`, `part.remove`, `part.restore`, `link.add`, `link.remove` |
 | 7 | the relic operations `relic.retire`, `relic.unretire` and `history.checkpoint` |
+| 8 | a `relic.create` or `relic.migrate` that names a [built-in schema](#relic-schemas) |
 
-Generation 5 is the one row decided by an operation's payload rather than its
-type: a `field.set` of any other field is still generation 0, and so is a create
-with no due date. See [Due dates](#due-dates) for why.
+Generations 5 and 8 are decided by an operation's payload rather than its type: a
+`field.set` of any other field is still generation 0, and so is a create with no
+due date; see [Due dates](#due-dates) for why. A `relic.create` or
+`relic.migrate` that names a project version, or none, stays at generation 6.
 
-Generations 6 and 7 belong to relics, and 6 to their schemas too. Neither marks
+Generations 6, 7 and 8 belong to relics, and 6 to project schemas too. None marks
 a task pack, so a task history is written exactly as before. A relic pack carries
 the generation its operations need, and a state the larger of its parent's and
 its pack's. It marks a configuration pack only when the pack holds a
@@ -1286,8 +1330,12 @@ bypassed and the command synchronizes inline.
 A build from before retiring and compaction, which folds generation 6, reads a
 retired or compacted relic from its stored state, refuses to change it as
 `newer-writer`, and never pushes over it; a relic it already held on the old
-history is left there and reported `needs-upgrade`. A release from before relics
-sees no relic at all.
+history is left there and reported `needs-upgrade`. A relic written under a
+built-in schema is generation 8, and a build from before the built-ins, one that
+folds generation 6 or 7, treats it the same way: it shows the relic from its
+stored state, refuses to change it, and never pushes over it. The new generation
+is what keeps such a build from judging the built-in name a malformed version ID
+and calling the relic corrupt. A release from before relics sees no relic at all.
 
 Generation 0 is every operation type Workbook shipped before assignments, and it
 is the only generation that writes no marker. So a create, a field change, a
@@ -1966,10 +2014,13 @@ WB-R-01M8FNC4Y9ZSCQ6E309E1H65GQ|01M8FNC6ZRCDBFDN2Y8MMKD43C|01M8FNC5BNK2SV4A47G38
 WB-R-01M8FNC4Y9ZSCQ6E309E1H65GQ|01M8FNC7256KH6HRKR57JKYA3D|01M8FNC5BNK2SV4A47G38AB5Y2|relic|WB-R-01M8FNC5V9NMQTZ105DPV173BC|01M8FNC69QHEMTG2FA0F80KBKR|changes|01M8FNC69QHEMTG2FA0F80KBKR|
 ```
 
-The cache, with the relic tables and `relic_links`, is schema version 13; a
+The cache, with the relic tables and `relic_links`, is schema version 14; a
 cache of another version is replaced by the first command this build runs, and
-an older build replaces a version 13 cache the same way. Version 13 added the
-compaction and stub columns above.
+an older build replaces a version 14 cache the same way. Version 13 added the
+compaction and stub columns above. Version 14 changed no table: a stored judgment
+now covers a relic's links and the built-in schemas, so the cache of an earlier
+build, which could say `conforms` for a relic whose links do not fit, is
+replaced.
 A relic the index cannot hold is reported by a reverse lookup as unread, with
 a `relic-links-unread` warning, rather than read from Git, so the lookup stays
 one query and a damaged relic's links stay out of sight from the task until it
@@ -1993,8 +2044,8 @@ fresh clone of 1,000 relics that first pass took 1,389 ms; see
 [schema version](#relic-schemas) it names: `conformance` is `open`, `conforms`,
 `not-conforming` or `unknown-schema`, and `schema_problem` the first problem for
 one that does not fit. The relic pass judges a relic when it indexes it, from the
-fields it holds, and reads each schema it needs once; a project with no schema
-reads none. The pass `workbook show <task>` runs reads no schema: it stores a
+fields and links it holds, and reads each project schema it needs once; a built-in
+comes from the program, and a relic that names no version needs no schema. The pass `workbook show <task>` runs reads no schema: it stores a
 changed relic that names a version as not yet judged, an empty `conformance`,
 and the next relic read judges it. A version, once listed, never changes, so a
 stored judgment stands while the relic does. The exceptions are judged again by

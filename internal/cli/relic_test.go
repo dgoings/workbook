@@ -882,7 +882,7 @@ func TestDocsDocumentRelicLinks(t *testing.T) {
 		}
 	}
 	projection := docSection(architecture, "## SQLite projection")
-	for _, required := range []string{"`seen`", "`pointer`", "schema version 13", "one query"} {
+	for _, required := range []string{"`seen`", "`pointer`", "schema version 14", "one query"} {
 		if !strings.Contains(projection, required) {
 			t.Errorf("the architecture's SQLite projection section is missing %q", required)
 		}
@@ -1071,7 +1071,7 @@ func TestDocsDocumentRelicSchemas(t *testing.T) {
 
 	architecture := strings.Join(strings.Fields(repositoryDoc(t, "docs", "architecture.md")), " ")
 	for _, required := range []string{
-		"schema.put", "relic-schema-", "relic.migrate", "schema version 13", "workbook.relic-schema",
+		"schema.put", "relic-schema-", "relic.migrate", "schema version 14", "workbook.relic-schema",
 		"relic-schema-renumbered",
 	} {
 		if !strings.Contains(architecture, required) {
@@ -1085,6 +1085,150 @@ func TestDocsDocumentRelicSchemas(t *testing.T) {
 	for _, required := range []string{"`workbook schema put", "`workbook relic migrate"} {
 		if !strings.Contains(readme, required) {
 			t.Errorf("the README's relic text is missing %q", required)
+		}
+	}
+}
+
+// Every project has built-in spec and plan schemas and a default list of
+// relationship names without saving anything, so the reference is where their
+// content and rules can be read: both files as shipped, each name with its
+// meaning, and the refusals in the words the code uses.
+func TestDocsDocumentBuiltInSchemas(t *testing.T) {
+	t.Parallel()
+	document := repositoryDoc(t, "docs", "reference.md")
+	builtins := docSection(document, "#### Built-in schemas")
+	if builtins == "" {
+		t.Fatal("docs/reference.md has no \"#### Built-in schemas\" section")
+	}
+
+	// Both files are in the reference, compared in canonical form so that
+	// only whitespace may differ.
+	shown := map[string]bool{}
+	_, after, _ := strings.Cut(document, "\n#### Built-in schemas\n")
+	after, _, _ = strings.Cut(after, "\n#### ")
+	for {
+		var found bool
+		if _, after, found = strings.Cut(after, "```json\n"); !found {
+			break
+		}
+		var block string
+		block, after, _ = strings.Cut(after, "\n```")
+		if canonical, err := core.CanonicalRelicValue([]byte(block)); err == nil {
+			shown[string(canonical)] = true
+		}
+	}
+	for _, version := range core.BuiltInRelicSchemaVersions() {
+		file := version.Type + "-" + strconv.Itoa(version.Version) + ".json"
+		canonical, err := core.CanonicalRelicValue([]byte(repositoryDoc(t, "internal", "core", "relicschemas", file)))
+		if err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		if !shown[string(canonical)] {
+			t.Errorf("\"#### Built-in schemas\" does not hold %s as shipped", file)
+		}
+		for _, required := range []string{
+			"`" + version.ID + "`",
+			version.Type + "\tbuilt in " + version.ID + "\t" + strconv.FormatInt(version.Bytes, 10) + " bytes",
+		} {
+			if !strings.Contains(builtins, strings.Join(strings.Fields(required), " ")) {
+				t.Errorf("\"#### Built-in schemas\" is missing %q", required)
+			}
+		}
+	}
+	for _, required := range []string{
+		"relic migrate <relic> --to spec", "--behind", "`builtIn`", "generation 8", "newer-writer",
+		"A released built-in schema never changes.", "a reference cannot name a built-in schema",
+		"upgrade Workbook and try again",
+	} {
+		if !strings.Contains(builtins, required) {
+			t.Errorf("\"#### Built-in schemas\" is missing %q", required)
+		}
+	}
+
+	names := docSection(document, "#### Relationship names")
+	if names == "" {
+		t.Fatal("docs/reference.md has no \"#### Relationship names\" section")
+	}
+	for _, relationship := range core.DefaultRelicRelationships {
+		if row := "| `" + relationship.Name + "` | " + relationship.Meaning + " |"; !strings.Contains(names, row) {
+			t.Errorf("\"#### Relationship names\" is missing the row %q", row)
+		}
+	}
+	_, _, schema, found := core.BuiltInRelicSchema("workbook:spec:1")
+	if !found {
+		t.Fatal("this build has no workbook:spec:1")
+	}
+	version := core.BuiltInRelicSchemaVersions()[0]
+	for _, required := range []string{
+		// What a new link is held to, and that a schema only adds names.
+		"A new link's relationship must be one of these names, or one that `links.relationships` of the schema version the linking relic names adds. An open relic has these names only. A schema can add names and cannot remove one.",
+		// What happens to a link already held under another name.
+		"A link already held with another name stays readable: no read, fetch, sync, replay or `workbook validate` refuses a relic for it.",
+		"On an open relic it is never judged.",
+		"On a relic under a schema it makes the relic `not-conforming`. A `relic migrate` to another version that does not allow the name is refused, naming the link.",
+		"relic update <relic> --unlink <link>",
+		core.CheckOpenRelicRelation("note", "blocks").Error(),
+		core.RelicSchemaRefusal(version, *schema.CheckLink("link", core.RelicLink{Rel: "blocks"})).Error(),
+	} {
+		if !strings.Contains(names, required) {
+			t.Errorf("\"#### Relationship names\" is missing %q", required)
+		}
+	}
+
+	checked := docSection(document, "#### When a relic is checked")
+	for _, required := range []string{
+		"`link <link-id> relationship \"<rel>\"`", "`link <link-id> pointer`", "`link relationship \"<rel>\"`",
+		"--set status=draft", "from a removed part",
+	} {
+		if !strings.Contains(checked, required) {
+			t.Errorf("\"#### When a relic is checked\" is missing %q", required)
+		}
+	}
+	collapsed := strings.Join(strings.Fields(document), " ")
+	for _, required := range []string{
+		"workbook schema show <type|built-in name>",
+		"workbook relic migrate <relic> --to <N|type|type@N|built-in name>",
+		"Schema: workbook:spec:1 (built in)", "unknown built-in workbook:spec:2; upgrade Workbook",
+	} {
+		if !strings.Contains(collapsed, required) {
+			t.Errorf("the reference is missing %q", required)
+		}
+	}
+	for _, stale := range []string{
+		"does not check it against any list", "a link's relationship, nor", "A link is judged only when it is added",
+		"--from-file - --type plan",
+	} {
+		if strings.Contains(collapsed, stale) {
+			t.Errorf("the reference still says %q", stale)
+		}
+	}
+	// Every example that creates a spec or a plan gives the status both
+	// built-ins require.
+	creates := regexp.MustCompile(`(?m)^workbook relic create .*--type (spec|plan)\b.*$`)
+	for _, line := range creates.FindAllString(document, -1) {
+		// "No status" is the one that shows the refusal.
+		if !strings.Contains(line, "--set status=") && !strings.Contains(line, `"No status"`) {
+			t.Errorf("the reference creates a spec or plan with no status: %q", line)
+		}
+	}
+
+	architecture := docSection(repositoryDoc(t, "docs", "architecture.md"), "### Relic schemas")
+	for _, required := range []string{"`workbook:<type>:<n>`", "`workbook:spec:1`", "generation 8", "never", "compiled"} {
+		if !strings.Contains(architecture, required) {
+			t.Errorf("the architecture's relic schema section is missing %q", required)
+		}
+	}
+	if whole := repositoryDoc(t, "docs", "architecture.md"); !strings.Contains(whole, "\n| 8 |") {
+		t.Error("the architecture's generation table has no row for generation 8")
+	}
+	readme := strings.Join(strings.Fields(repositoryDoc(t, "README.md")), " ")
+	if !strings.Contains(readme, "built-in schema") {
+		t.Error("the README does not say spec and plan have built-in schemas")
+	}
+	changelog := docSection(repositoryDoc(t, "CHANGELOG.md"), "## Unreleased")
+	for _, required := range []string{"workbook:spec:1", "workbook:plan:1", "--set", "generation 8", "implemented-by"} {
+		if !strings.Contains(changelog, required) {
+			t.Errorf("the changelog's unreleased entry is missing %q", required)
 		}
 	}
 }
