@@ -1234,6 +1234,11 @@ func TestRelicUpdateHelp(t *testing.T) {
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("relic update options = %q, want %q", names, want)
 	}
+	// --rel names every default relationship and where more come from.
+	if want := "a new link's relationship must be one of " + strings.Join(core.DefaultRelicRelationNames(), ", ") +
+		", or one the relic's schema adds in links.relationships"; !strings.Contains(output, want) {
+		t.Errorf("relic update help = %q, want %q", output, want)
+	}
 	if order := relicSubcommands(); !reflect.DeepEqual(order, []string{"create", "list", "show", "diff", "update", "migrate", "delete", "restore", "retire", "unretire", "export"}) {
 		t.Fatalf("relic subcommands = %q, want diff and update after show", order)
 	}

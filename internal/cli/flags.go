@@ -1005,7 +1005,8 @@ var commandSchemas = map[string]commandMetadata{
 					{Name: "restore-part", Kind: stringFlag, Value: "<part>", Description: "restore this removed part"},
 					{Name: "link", Kind: stringFlag, Value: "<task|relic[#part]>", Description: "link to this task, relic or part, with --rel and, from one part, --from"},
 					{Name: "from", Kind: stringFlag, Value: "<part>", Description: "make the link from this part instead of the whole relic"},
-					{Name: "rel", Kind: stringFlag, Value: "<rel>", Description: "the link's relationship, such as implemented-by"},
+					{Name: "rel", Kind: stringFlag, Value: "<rel>", Description: "the link's relationship, such as implemented-by; a new link's relationship must be one of " +
+						strings.Join(core.DefaultRelicRelationNames(), ", ") + ", or one the relic's schema adds in links.relationships"},
 					{Name: "pointer", Kind: stringFlag, Value: "<json object>", Description: "where in the target the link points, such as a quote or a time"},
 					{Name: "unlink", Kind: stringFlag, Value: "<link>", Description: "remove this link"},
 					{Name: "no-sync", Kind: boolFlag, Description: "skip synchronizing refs with the tasks remote (origin unless configured)"},

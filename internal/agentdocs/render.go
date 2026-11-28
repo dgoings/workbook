@@ -13,10 +13,15 @@ import (
 const GuidelinesPath = ".workbook/guidelines.md"
 
 // RelicTypeRules is what the guidelines say about one relic type that has a
-// schema: its newest version and that version's rules.
+// schema, saved by the project or built in: its newest version and that
+// version's rules.
 type RelicTypeRules struct {
 	Type    string
 	Version int
+	// BuiltIn is the version's name when the type's newest version is one
+	// Workbook ships, such as workbook:spec:1, and empty for a version the
+	// project saved. A built-in has no number, so Version is 0 then.
+	BuiltIn string
 	Summary core.RelicSchemaSummary
 	// Unreadable marks a version whose stored schema could not be read, which
 	// the guidelines say instead of listing rules. Summary is then empty.
@@ -51,8 +56,9 @@ type RelicTypeRules struct {
 // recorded no key change, and that project is using its founding key alone,
 // active and current.
 //
-// relicTypes lists the relic types that have a schema, sorted by type. With
-// none, the guidelines say nothing about schemas.
+// relicTypes lists the relic types that have a schema, sorted by type, the
+// built-in ones included. With none, the guidelines name no relic type and
+// carry no recipe.
 func RenderGuidelines(
 	project core.ProjectConfig,
 	vocabulary core.Vocabulary,
@@ -278,7 +284,9 @@ func RenderGuidelines(
 // schemas there, so the block cannot name a command or an option that does not
 // exist.
 //
-// A project with relic schemas gets a list of them at the end of the section.
+// The section ends with the default link relationships, a recipe for each of
+// spec and plan that still uses its built-in schema, and the list of relic
+// types that have a schema.
 func relicGuidelines(keys core.KeySet, relicTypes []RelicTypeRules) string {
 	key := keys.Current()
 	return "## Relics\n\n" +
@@ -336,11 +344,81 @@ func relicGuidelines(keys core.KeySet, relicTypes []RelicTypeRules) string {
 		"For other edits (the title, a property or field, or adding, moving,\n" +
 		"removing or restoring a part), run `workbook relic update --help`; for\n" +
 		"export, see `workbook relic --help`.\n\n" +
+		linkRelationshipGuidelines() +
+		relicRecipeGuidelines(relicTypes) +
 		relicTypeGuidelines(relicTypes)
 }
 
-// relicTypeGuidelines lists the project's relic types that have a schema, with
-// what a save is checked for. It is empty for a project with none.
+// linkRelationshipGuidelines lists the relationship names every relic may give
+// a new link, which are Workbook's own and the same in every project.
+func linkRelationshipGuidelines() string {
+	var builder strings.Builder
+	builder.WriteString("### Link relationships\n\n")
+	builder.WriteString("A link's `--rel` must be one of these, or one the relic's schema adds in\n")
+	builder.WriteString("`links.relationships`; a link made earlier with another name stays readable.\n\n")
+	builder.WriteString("| Name | Read as |\n| --- | --- |\n")
+	for _, relationship := range core.DefaultRelicRelationships {
+		builder.WriteString("| `" + relationship.Name + "` | " + tableCell(relationship.Meaning) + " |\n")
+	}
+	builder.WriteString("\n")
+	return builder.String()
+}
+
+// relicRecipes are the commands that write a relic under each built-in schema
+// an agent is likeliest to be asked for, in the order they are listed. The
+// text is written for the built-in schemas, so a type whose newest version is
+// the project's own gets none.
+//
+// Every line is run as written, its placeholders filled in, by
+// TestGuidelinesRecipeWritesConformingSpecAndPlan in internal/cli. A
+// placeholder that may hold spaces is quoted.
+var relicRecipes = []struct{ relicType, text string }{
+	{"spec", "To write a spec:\n\n" +
+		"```sh\n" +
+		"workbook relic create \"<title>\" --type spec --set status=draft --json\n" +
+		"workbook relic update <relic> --add-part --part-type section --field \"title=<title>\" --body-file <file.md> --json\n" +
+		"workbook relic update <relic> --add-part --part-type decision --field \"title=<question>\" --field \"chosen=<choice>\" --field status=proposed --body-file <file.md> --json\n" +
+		"workbook relic update <relic> --add-part --part-type open-question --field \"title=<question>\" --body-file <file.md> --json\n" +
+		"workbook relic update <relic> --link <task> --from <part> --rel implemented-by --json\n" +
+		"```\n\n" +
+		"Every part needs `title`; bodies are optional Markdown. Set `status` (`draft`,\n" +
+		"`approved` or `superseded`) with `workbook relic update <relic> --set\n" +
+		"status=approved`. A relic created before the defaults names no schema, and\n" +
+		"`workbook relic migrate <relic> --to spec` adopts the default.\n\n"},
+	{"plan", "To write a plan:\n\n" +
+		"```sh\n" +
+		"workbook relic create \"<title>\" --type plan --set status=draft --json\n" +
+		"workbook relic update <relic> --add-part --part-type section --field \"title=<title>\" --body-file <file.md> --json\n" +
+		"workbook relic update <relic> --add-part --part-type step --field \"title=<title>\" --field-json 'needs=[\"<title>\"]' --body-file <file.md> --json\n" +
+		"workbook relic update <relic> --link <task> --from <part> --rel implemented-by --json\n" +
+		"```\n\n" +
+		"Every part needs `title`; bodies are optional Markdown. A step's `needs` lists\n" +
+		"the titles of the steps it needs first; leave it out when there are none. Set\n" +
+		"`status` (`draft`, `approved`, `in-progress` or `done`) with `workbook relic\n" +
+		"update <relic> --set status=approved`. A relic created before the defaults names\n" +
+		"no schema, and `workbook relic migrate <relic> --to plan` adopts the default.\n\n"},
+}
+
+// relicRecipeGuidelines renders the recipes of the types whose newest version
+// is a built-in. It is empty when none is.
+func relicRecipeGuidelines(relicTypes []RelicTypeRules) string {
+	var recipes strings.Builder
+	for _, recipe := range relicRecipes {
+		for _, rules := range relicTypes {
+			if rules.Type == recipe.relicType && rules.BuiltIn != "" {
+				recipes.WriteString(recipe.text)
+			}
+		}
+	}
+	if recipes.Len() == 0 {
+		return ""
+	}
+	return "### Writing a spec or a plan\n\n" + recipes.String()
+}
+
+// relicTypeGuidelines lists the relic types that have a schema, the project's
+// own or a built-in, with what a save is checked for. It is empty when the
+// caller names none.
 //
 // Everything a schema says is written by whoever can push the shared settings,
 // so each such value passes through authoredText and sits inside a list item
@@ -358,7 +436,12 @@ func relicTypeGuidelines(relicTypes []RelicTypeRules) string {
 	builder.WriteString("relics behind. Each type below shows its newest version;\n")
 	builder.WriteString("`workbook schema show <type> --json` gives the full rules.\n\n")
 	for _, rules := range relicTypes {
-		builder.WriteString("- " + schemaName(rules.Type) + ", version " + strconv.Itoa(rules.Version))
+		builder.WriteString("- " + schemaName(rules.Type) + ", ")
+		if rules.BuiltIn != "" {
+			builder.WriteString("built-in " + schemaName(rules.BuiltIn))
+		} else {
+			builder.WriteString("version " + strconv.Itoa(rules.Version))
+		}
 		if rules.Unreadable {
 			builder.WriteString(": schema unreadable; run `workbook validate`\n")
 			continue

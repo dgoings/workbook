@@ -770,7 +770,18 @@ const defaultRelicSection = "## Relics\n\n" +
 	"`workbook relic diff <relic>#<part> <version> --json` with that version.\n\n" +
 	"For other edits (the title, a property or field, or adding, moving,\n" +
 	"removing or restoring a part), run `workbook relic update --help`; for\n" +
-	"export, see `workbook relic --help`.\n"
+	"export, see `workbook relic --help`.\n\n" +
+	"### Link relationships\n\n" +
+	"A link's `--rel` must be one of these, or one the relic's schema adds in\n" +
+	"`links.relationships`; a link made earlier with another name stays readable.\n\n" +
+	"| Name | Read as |\n| --- | --- |\n" +
+	"| `implemented-by` | This part of a spec or plan is built by that task. |\n" +
+	"| `derived-from` | This was drawn from that source. |\n" +
+	"| `summarizes` | This is a summary of that. |\n" +
+	"| `decided-in` | This decision was made in that meeting or transcript turn. |\n" +
+	"| `changes` | This decision changes that part of a spec. |\n" +
+	"| `supersedes` | This relic replaces that one. |\n" +
+	"| `relates-to` | A general connection with no stronger meaning. |\n"
 
 func TestRenderGuidelinesPinsTheRelicSection(t *testing.T) {
 	guidelines := RenderGuidelines(testProject(), core.Vocabulary{}, core.PriorityVocabulary{}, core.KeySet{}, nil)
@@ -852,6 +863,13 @@ func TestSkillTeachesRelics(t *testing.T) {
 		// A project's schemas, and moving a relic to a newer one.
 		"`workbook schema show <type> --json`",
 		"`workbook relic migrate <relic> --to <target>`",
+		// The built-in types, and how to start and adopt one.
+		"`spec` and `plan` have built-in schemas",
+		"`--set status=draft`",
+		"`workbook relic migrate <relic> --to spec`",
+		// Where a link's name comes from.
+		"`--rel`",
+		"`links.relationships`",
 		// Restated where agents look for it.
 		"Save a relic body only with the `--base` you read.",
 	} {
@@ -924,6 +942,91 @@ func TestGuidelinesListRelicTypes(t *testing.T) {
 	relics := section(t, guidelines, "## Relics")
 	if want := defaultRelicSection + "\n" + defaultRelicTypesBlock; relics != want {
 		t.Errorf("relic section =\n%s\nwant\n%s", relics, want)
+	}
+}
+
+// builtInRules is what the guidelines say of a project that has saved no
+// schema of its own: every built-in this build ships.
+func builtInRules(t *testing.T) []RelicTypeRules {
+	t.Helper()
+	listing := core.RelicSchemaListing{}.WithBuiltIns()
+	var rules []RelicTypeRules
+	for _, relicType := range listing.EffectiveTypes() {
+		newest, _ := listing.Newest(relicType)
+		_, _, schema, ok := core.BuiltInRelicSchema(newest.ID)
+		if !ok {
+			t.Fatalf("no built-in %s", newest.ID)
+		}
+		rules = append(rules, RelicTypeRules{Type: relicType, BuiltIn: newest.ID, Summary: schema.Summary()})
+	}
+	return rules
+}
+
+const builtInRecipes = "### Writing a spec or a plan\n\n" +
+	"To write a spec:\n\n" +
+	"```sh\n" +
+	"workbook relic create \"<title>\" --type spec --set status=draft --json\n" +
+	"workbook relic update <relic> --add-part --part-type section --field \"title=<title>\" --body-file <file.md> --json\n" +
+	"workbook relic update <relic> --add-part --part-type decision --field \"title=<question>\" --field \"chosen=<choice>\" --field status=proposed --body-file <file.md> --json\n" +
+	"workbook relic update <relic> --add-part --part-type open-question --field \"title=<question>\" --body-file <file.md> --json\n" +
+	"workbook relic update <relic> --link <task> --from <part> --rel implemented-by --json\n" +
+	"```\n\n" +
+	"Every part needs `title`; bodies are optional Markdown. Set `status` (`draft`,\n" +
+	"`approved` or `superseded`) with `workbook relic update <relic> --set\n" +
+	"status=approved`. A relic created before the defaults names no schema, and\n" +
+	"`workbook relic migrate <relic> --to spec` adopts the default.\n\n" +
+	"To write a plan:\n\n" +
+	"```sh\n" +
+	"workbook relic create \"<title>\" --type plan --set status=draft --json\n" +
+	"workbook relic update <relic> --add-part --part-type section --field \"title=<title>\" --body-file <file.md> --json\n" +
+	"workbook relic update <relic> --add-part --part-type step --field \"title=<title>\" --field-json 'needs=[\"<title>\"]' --body-file <file.md> --json\n" +
+	"workbook relic update <relic> --link <task> --from <part> --rel implemented-by --json\n" +
+	"```\n\n" +
+	"Every part needs `title`; bodies are optional Markdown. A step's `needs` lists\n" +
+	"the titles of the steps it needs first; leave it out when there are none. Set\n" +
+	"`status` (`draft`, `approved`, `in-progress` or `done`) with `workbook relic\n" +
+	"update <relic> --set status=approved`. A relic created before the defaults names\n" +
+	"no schema, and `workbook relic migrate <relic> --to plan` adopts the default.\n\n"
+
+const builtInTypesBlock = "### This project's relic types\n\n" +
+	"A relic save is checked against the schema version the relic names, and a\n" +
+	"refusal names the rule it broke. `workbook relic migrate <relic> --to <target>`\n" +
+	"moves a relic to a newer version, and `workbook relic list --behind` lists the\n" +
+	"relics behind. Each type below shows its newest version;\n" +
+	"`workbook schema show <type> --json` gives the full rules.\n\n" +
+	"- `plan`, built-in `workbook:plan:1`\n" +
+	"  - Title: Plan\n" +
+	"  - Description: How a spec gets built: titled sections of context and the steps that build it. Link each step to the task that builds it with implemented-by.\n" +
+	"  - Required properties: `status` (one of `draft`, `approved`, `in-progress`, `done`)\n" +
+	"  - Part `section`: required fields `title`; body optional\n" +
+	"  - Part `step`: required fields `title`; body optional\n" +
+	"- `spec`, built-in `workbook:spec:1`\n" +
+	"  - Title: Spec\n" +
+	"  - Description: A design for one feature or change: titled sections, the decisions it makes and the questions it leaves open.\n" +
+	"  - Required properties: `status` (one of `draft`, `approved`, `superseded`)\n" +
+	"  - Part `decision`: required fields `title`; body optional\n" +
+	"  - Part `open-question`: required fields `title`; body optional\n" +
+	"  - Part `section`: required fields `title`; body optional\n"
+
+func TestGuidelinesListBuiltInTypes(t *testing.T) {
+	guidelines := renderWithRelicTypes(builtInRules(t))
+
+	want := defaultRelicSection + "\n" + builtInRecipes + builtInTypesBlock
+	if got := section(t, guidelines, "## Relics"); got != want {
+		t.Errorf("relic section =\n%s\nwant\n%s", got, want)
+	}
+	if again := renderWithRelicTypes(builtInRules(t)); again != guidelines {
+		t.Errorf("the same project renders differently the second time")
+	}
+}
+
+// A type whose newest version is the project's own gets no recipe, which was
+// written for the built-in.
+func TestGuidelinesWithoutABuiltInHaveNoRecipe(t *testing.T) {
+	guidelines := renderWithRelicTypes([]RelicTypeRules{{Type: "plan", Version: 1}, {Type: "spec", Version: 1}})
+
+	if strings.Contains(guidelines, "### Writing a spec or a plan") {
+		t.Errorf("guidelines carry a recipe for the project's own schemas:\n%s", section(t, guidelines, "## Relics"))
 	}
 }
 

@@ -98,11 +98,17 @@ to the current text and save with `--base` set to the current version.
 Otherwise show the user both versions and ask; never save over text you have
 not read.
 
-A project may give a relic type a schema; `.workbook/guidelines.md` lists
-those types. A save is checked against the version the relic names, and a
-refusal names the rule it broke: change the input rather than retrying. Read
-the full rules with `workbook schema show <type> --json`. To move a relic to a
-newer version, run `workbook relic migrate <relic> --to <target>`, where the
+The types `spec` and `plan` have built-in schemas, and a project may save its
+own schema for any type; `.workbook/guidelines.md` lists the types with one,
+with the commands that write a spec or a plan. Both built-ins require a
+`status`, so start one with `--set status=draft`. A relic created before the
+defaults names no schema; `workbook relic migrate <relic> --to spec` (or
+`--to plan`) adopts one. A new link's `--rel` must be one of the default names
+the guidelines list, or one the relic's schema adds in `links.relationships`.
+
+A save is checked against the version the relic names, and a refusal names the
+rule it broke: change the input rather than retrying. Read the full rules with
+`workbook schema show <type> --json`. To move a relic to a newer version, run `workbook relic migrate <relic> --to <target>`, where the
 target is a version number, a type or `<type>@<number>`.
 
 For other edits (the title, a property or field, or adding, moving, removing or

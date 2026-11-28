@@ -67,22 +67,27 @@ func regenerateGuidelines(
 	return &report, err
 }
 
-// guidelinesRelicTypes describes the newest schema of each relic type in the
-// listing, for the guidelines. A type whose schema cannot be read is described
-// as unreadable, so that one bad version does not keep the rest of the file
-// from being written. Only a canceled command is an error: its reads fail for a
-// reason that says nothing about the schemas.
+// guidelinesRelicTypes describes the newest schema of each relic type that has
+// one, for the guidelines: the listing's own versions, and this build's
+// built-ins for the types the project has saved nothing for. A type whose
+// schema cannot be read is described as unreadable, so that one bad version
+// does not keep the rest of the file from being written. Only a canceled command
+// is an error: its reads fail for a reason that says nothing about the schemas.
 func guidelinesRelicTypes(
 	ctx context.Context,
 	repository *gitstore.Repository,
 	config core.ProjectConfig,
 	listing core.RelicSchemaListing,
 ) ([]agentdocs.RelicTypeRules, error) {
+	listing = listing.WithBuiltIns()
 	var types []agentdocs.RelicTypeRules
-	for _, relicType := range listing.Types() {
+	for _, relicType := range listing.EffectiveTypes() {
 		newest, _ := listing.Newest(relicType)
 		rules := agentdocs.RelicTypeRules{Type: relicType, Version: newest.Version}
-		if _, schema, err := repository.ReadRelicSchema(ctx, config, newest); err != nil {
+		if newest.IsBuiltIn() {
+			rules.Version, rules.BuiltIn = 0, newest.ID
+		}
+		if _, schema, err := core.ReadRelicSchemaVersion(ctx, repository, config, newest); err != nil {
 			rules.Unreadable = true
 		} else {
 			rules.Summary = schema.Summary()
