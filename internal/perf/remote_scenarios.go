@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 
 	"github.com/dgoings/workbook/internal/core"
@@ -38,9 +39,10 @@ type remoteErrorEnvelope struct {
 }
 
 type remoteScenarioResult struct {
-	Remote string
-	Fetch  gitstore.SyncResult
-	Push   gitstore.SyncResult
+	Remote   string
+	Fetch    gitstore.SyncResult
+	Push     gitstore.SyncResult
+	Warnings []core.Warning
 }
 
 type remoteScenarioDependencies struct {
@@ -74,6 +76,7 @@ var remoteScenarioDefinitions = []remoteScenarioDefinition{
 	{name: "sync-already-synchronized", topology: RemoteAlreadySynchronized, command: "sync"},
 	{name: "sync-small-changed-ref-set", topology: RemoteSmallChangedRefSet, command: "sync"},
 	{name: "sync-divergent-tips", topology: RemoteDivergentTips, command: "sync"},
+	{name: "sync-divergent-descriptions", topology: RemoteDivergentDescriptions, command: "sync"},
 	{name: "sync-malformed-local-tip", topology: RemoteMalformedLocalTip, command: "push", expectFailure: true},
 	{name: "sync-malformed-remote-tip", topology: RemoteMalformedRemoteTip, command: "fetch", expectFailure: true},
 }
@@ -219,7 +222,48 @@ func verifyRemoteScenarioMeasurement(ctx context.Context, definition remoteScena
 	if err := requireRemoteTaskResults("push", result.Push.Tasks, push); err != nil {
 		return err
 	}
-	return requireRemoteScenarioRefs(ctx, definition.topology, fixture, dependencies)
+	if err := requireRemoteScenarioRefs(ctx, definition.topology, fixture, dependencies); err != nil {
+		return err
+	}
+	if definition.topology == RemoteDivergentDescriptions {
+		return requireMergedDescription(ctx, fixture, result.Warnings)
+	}
+	return nil
+}
+
+// requireMergedDescription checks that the divergent task's description was
+// merged: this clone's tip records a description.merge and holds both edits,
+// and the sync reported no more than one merge warning. The task being
+// reconciled, with no conflict, is what the shared task result, exit code and
+// envelope checks already require.
+func requireMergedDescription(ctx context.Context, fixture RemoteFixture, warnings []core.Warning) error {
+	merged := 0
+	for _, warning := range warnings {
+		if warning.Code == core.WarningDescriptionMerged {
+			merged++
+		}
+	}
+	if merged > 1 {
+		return fmt.Errorf("sync reported %d %s warnings, want one", merged, core.WarningDescriptionMerged)
+	}
+	taskID := fixture.TaskIDs[0]
+	head, err := fixtureRefObjectID(ctx, fixture.LocalRoot, taskRefName(taskID))
+	if err != nil {
+		return err
+	}
+	tip, err := readFixtureCommit(ctx, fixture.LocalRoot, head)
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(tip.Pack.Operations, func(operation core.Operation) bool {
+		return operation.Type == core.OperationDescriptionMerge
+	}) {
+		return fmt.Errorf("task %s tip %s records no %s", taskID, head, core.OperationDescriptionMerge)
+	}
+	if _, _, _, want := benchmarkDescriptions(); tip.State.Task.Description != want {
+		return fmt.Errorf("task %s description does not hold both edits", taskID)
+	}
+	return nil
 }
 
 func remoteScenarioContractFor(definition remoteScenarioDefinition) remoteScenarioContract {
@@ -273,7 +317,7 @@ func expectedRemoteTaskResults(topology RemoteTopology, taskIDs []string) ([]git
 			}
 		}
 		return fetch, push
-	case RemoteDivergentTips:
+	case RemoteDivergentTips, RemoteDivergentDescriptions:
 		fetch := all(gitstore.SyncUnchanged)
 		fetch[0].Status = gitstore.SyncReconciled
 		push := all(gitstore.SyncUpToDate)
@@ -418,7 +462,7 @@ func expectedRemoteScenarioRefs(topology RemoteTopology, fixture RemoteFixture) 
 			}
 			want[taskID] = refs
 		}
-	case RemoteDivergentTips:
+	case RemoteDivergentTips, RemoteDivergentDescriptions:
 		// Every unchanged task fast-forwards nothing and republishes nothing.
 		// The divergent task's local operation is replayed onto origin's tip and
 		// published, leaving tracking on the tip the fetch downloaded.
@@ -480,7 +524,7 @@ func decodeRemoteScenarioResultWithContract(stdout, stderr []byte, contract remo
 		}
 	}
 
-	var result remoteScenarioResult
+	result := remoteScenarioResult{Warnings: envelope.Warnings}
 	switch contract.command {
 	case "fetch":
 		if err := decodeRemoteJSON(envelope.Data, &result.Fetch); err != nil {

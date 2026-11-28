@@ -644,7 +644,7 @@ func selectedRemoteScenarioNames(scenarios []string) []string {
 	remote := make([]string, 0, len(scenarios))
 	for _, scenario := range scenarios {
 		switch scenario {
-		case "sync-fresh-checkout", "sync-initial-publication", "sync-already-synchronized", "sync-small-changed-ref-set", "sync-divergent-tips", "sync-malformed-local-tip", "sync-malformed-remote-tip":
+		case "sync-fresh-checkout", "sync-initial-publication", "sync-already-synchronized", "sync-small-changed-ref-set", "sync-divergent-tips", "sync-divergent-descriptions", "sync-malformed-local-tip", "sync-malformed-remote-tip":
 			remote = append(remote, scenario)
 		}
 	}

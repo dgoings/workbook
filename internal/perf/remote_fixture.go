@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ const (
 	RemoteAlreadySynchronized        RemoteTopology = "already-synchronized"
 	RemoteSmallChangedRefSet         RemoteTopology = "small-changed-ref-set"
 	RemoteDivergentTips              RemoteTopology = "divergent-tips"
+	RemoteDivergentDescriptions      RemoteTopology = "divergent-descriptions"
 	RemoteMalformedLocalTip          RemoteTopology = "malformed-local-tip"
 	RemoteMalformedRemoteTip         RemoteTopology = "malformed-remote-tip"
 	RemoteBuriedCheckpointCorruption RemoteTopology = "buried-checkpoint-corruption"
@@ -106,7 +108,7 @@ func validateRemoteTopologyFixture(spec FixtureSpec, topology RemoteTopology) er
 		if spec.ActiveTasks < 10 {
 			return fmt.Errorf("remote topology %q requires at least 10 active tasks", topology)
 		}
-	case RemoteDivergentTips, RemoteMalformedLocalTip, RemoteMalformedRemoteTip, RemoteBuriedCheckpointCorruption:
+	case RemoteDivergentTips, RemoteDivergentDescriptions, RemoteMalformedLocalTip, RemoteMalformedRemoteTip, RemoteBuriedCheckpointCorruption:
 		if spec.ActiveTasks < 1 {
 			return fmt.Errorf("remote topology %q requires at least 1 active task", topology)
 		}
@@ -116,7 +118,7 @@ func validateRemoteTopologyFixture(spec FixtureSpec, topology RemoteTopology) er
 
 func validRemoteTopology(topology RemoteTopology) bool {
 	switch topology {
-	case RemoteFreshCheckout, RemoteInitialPublication, RemoteAlreadySynchronized, RemoteSmallChangedRefSet, RemoteDivergentTips, RemoteMalformedLocalTip, RemoteMalformedRemoteTip, RemoteBuriedCheckpointCorruption:
+	case RemoteFreshCheckout, RemoteInitialPublication, RemoteAlreadySynchronized, RemoteSmallChangedRefSet, RemoteDivergentTips, RemoteDivergentDescriptions, RemoteMalformedLocalTip, RemoteMalformedRemoteTip, RemoteBuriedCheckpointCorruption:
 		return true
 	default:
 		return false
@@ -203,6 +205,27 @@ func constructRemoteTopology(ctx context.Context, sourceRoot, localRoot, peerRoo
 			return err
 		}
 		if err := appendFixtureTask(ctx, peerRoot, config, activeTaskIDs[0], 1000); err != nil {
+			return err
+		}
+		if err := publishFixtureTasks(ctx, peerRoot, originRoot); err != nil {
+			return err
+		}
+		return fetchFixtureTracking(ctx, localRoot)
+	case RemoteDivergentDescriptions:
+		// The same divergence with both sides editing the description, far
+		// enough apart to merge. The long text they start from is written
+		// before the clones are populated, so both hold it.
+		base, local, peer, _ := benchmarkDescriptions()
+		if err := appendFixtureDescription(ctx, sourceRoot, config, activeTaskIDs[0], 0, base); err != nil {
+			return err
+		}
+		if err := populateSynchronizedFixture(ctx, sourceRoot, localRoot, peerRoot, originRoot); err != nil {
+			return err
+		}
+		if err := appendFixtureDescription(ctx, localRoot, config, activeTaskIDs[0], 1000, local); err != nil {
+			return err
+		}
+		if err := appendFixtureDescription(ctx, peerRoot, config, activeTaskIDs[0], 2000, peer); err != nil {
 			return err
 		}
 		if err := publishFixtureTasks(ctx, peerRoot, originRoot); err != nil {
@@ -307,6 +330,36 @@ func appendFixtureLabel(
 	taskIndex int,
 	label string,
 ) error {
+	return appendFixtureEdit(ctx, root, config, taskID, taskIndex,
+		core.Operation{Type: core.OperationSetAdd, Field: "labels", Value: label},
+		"workbook: benchmark fixture label")
+}
+
+// appendFixtureDescription appends one save of the whole description.
+func appendFixtureDescription(
+	ctx context.Context,
+	root string,
+	config core.ProjectConfig,
+	taskID string,
+	taskIndex int,
+	description string,
+) error {
+	return appendFixtureEdit(ctx, root, config, taskID, taskIndex,
+		core.Operation{Type: core.OperationFieldSet, Field: "description", Value: description},
+		"workbook: benchmark fixture description")
+}
+
+// appendFixtureEdit appends operation, under a deterministic ID and time taken
+// from taskIndex, to the task's tip in root and moves its ref.
+func appendFixtureEdit(
+	ctx context.Context,
+	root string,
+	config core.ProjectConfig,
+	taskID string,
+	taskIndex int,
+	operation core.Operation,
+	message string,
+) error {
 	head, err := fixtureRefObjectID(ctx, root, taskRefName(taskID))
 	if err != nil {
 		return err
@@ -317,7 +370,7 @@ func appendFixtureLabel(
 	}
 	ids := newFixtureIDs()
 	ids.nextAt = benchmarkOrigin.AddDate(1, 0, 0).Add(time.Duration(taskIndex) * time.Millisecond)
-	operationID, err := ids.next()
+	operation.ID, err = ids.next()
 	if err != nil {
 		return fmt.Errorf("generate fixture operation ID: %w", err)
 	}
@@ -326,17 +379,41 @@ func appendFixtureLabel(
 	pack := core.NewOperationPack(
 		config.ProjectID, taskID, parent.Pack.HistoryGeneration, benchmarkActorID,
 		parent.Pack.LogicalClock+1, ids.timestamp(),
-		[]core.Operation{{ID: operationID, Type: core.OperationSetAdd, Field: "labels", Value: label}},
+		[]core.Operation{operation},
 	)
 	state, err := core.Apply(&parent.State, pack)
 	if err != nil {
-		return fmt.Errorf("apply fixture label operation: %w", err)
+		return fmt.Errorf("apply fixture %s operation: %w", operation.Type, err)
 	}
-	commit, err := writeFixtureCommit(ctx, root, parent.Head, pack, state, "workbook: benchmark fixture label")
+	commit, err := writeFixtureCommit(ctx, root, parent.Head, pack, state, message)
 	if err != nil {
 		return err
 	}
 	return updateFixtureRef(ctx, root, taskRefName(taskID), commit.Head, head)
+}
+
+// benchmarkDescriptions returns the description the two sides of the
+// divergent-descriptions topology start from, 1,000 lines and about 60 KiB; the
+// local save of it, which changes line 990; origin's, which changes line 10;
+// and the text holding both changes.
+func benchmarkDescriptions() (base, local, peer, merged string) {
+	lines := make([]string, 1000)
+	for index := range lines {
+		lines[index] = fmt.Sprintf("%-60s\n", fmt.Sprintf("line %04d: shared benchmark description", index+1))
+	}
+	text := func(edits map[int]string) string {
+		edited := slices.Clone(lines)
+		for number, change := range edits {
+			edited[number-1] = fmt.Sprintf("%-60s\n", fmt.Sprintf("line %04d: %s", number, change))
+		}
+		return strings.Join(edited, "")
+	}
+	const localLine, peerLine = 990, 10
+	const localChange, peerChange = "changed on this clone", "changed on origin"
+	return text(nil),
+		text(map[int]string{localLine: localChange}),
+		text(map[int]string{peerLine: peerChange}),
+		text(map[int]string{localLine: localChange, peerLine: peerChange})
 }
 
 func replaceFixtureRefWithMalformedCommit(ctx context.Context, root, ref string) error {

@@ -26,6 +26,7 @@ func TestBuildRemoteFixture(t *testing.T) {
 		RemoteAlreadySynchronized,
 		RemoteSmallChangedRefSet,
 		RemoteDivergentTips,
+		RemoteDivergentDescriptions,
 		RemoteMalformedLocalTip,
 		RemoteMalformedRemoteTip,
 		RemoteBuriedCheckpointCorruption,
@@ -72,7 +73,7 @@ func TestBuildRemoteFixture(t *testing.T) {
 						assertAllNamespacesMatch(t, fixture)
 					case RemoteSmallChangedRefSet:
 						assertChangedSet(t, fixture, 5, 5)
-					case RemoteDivergentTips:
+					case RemoteDivergentTips, RemoteDivergentDescriptions:
 						assertDivergentChildren(t, fixture)
 					case RemoteMalformedLocalTip:
 						assertMalformedTree(t, fixture.LocalRoot, fixture.TaskIDs[0])
@@ -116,6 +117,7 @@ func TestBuildRemoteFixtureRejectsTopologiesWithoutRequiredActiveTasks(t *testin
 	}{
 		{topology: RemoteSmallChangedRefSet, want: "requires at least 10 active tasks"},
 		{topology: RemoteDivergentTips, want: "requires at least 1 active task"},
+		{topology: RemoteDivergentDescriptions, want: "requires at least 1 active task"},
 		{topology: RemoteMalformedLocalTip, want: "requires at least 1 active task"},
 		{topology: RemoteMalformedRemoteTip, want: "requires at least 1 active task"},
 		{topology: RemoteBuriedCheckpointCorruption, want: "requires at least 1 active task"},
@@ -135,6 +137,7 @@ func TestBuildRemoteFixtureUsesDeterministicSyntheticCommitIDs(t *testing.T) {
 	topologies := []RemoteTopology{
 		RemoteSmallChangedRefSet,
 		RemoteDivergentTips,
+		RemoteDivergentDescriptions,
 		RemoteMalformedLocalTip,
 		RemoteMalformedRemoteTip,
 		RemoteBuriedCheckpointCorruption,

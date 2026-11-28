@@ -239,6 +239,20 @@ func TestRunBenchmarkRunsOnlySelectedRemoteScenario(t *testing.T) {
 	}
 }
 
+// Mutation witness: a registered remote scenario the command does not hand to
+// the remote family is selected, and then silently never measured.
+func TestEveryRegisteredRemoteSyncScenarioIsDispatched(t *testing.T) {
+	var want []string
+	for _, name := range perf.ScenarioNames() {
+		if strings.HasPrefix(name, "sync-") && !strings.HasSuffix(name, "-local-bare") {
+			want = append(want, name)
+		}
+	}
+	if got := selectedRemoteScenarioNames(perf.ScenarioNames()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("remote scenarios = %v, want %v", got, want)
+	}
+}
+
 // Mutation witness: filtering warm results after running the whole family
 // would attempt the ten-task bursts and reject this valid api-update-only run.
 func TestRunBenchmarkRunsOnlySelectedWarmScenario(t *testing.T) {

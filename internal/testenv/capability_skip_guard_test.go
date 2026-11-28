@@ -65,7 +65,7 @@ type bareSkipException struct {
 var bareSkipExceptions = []bareSkipException{{
 	File:     "internal/cli/relic_compat_test.go",
 	Function: "preMergeBinary",
-	Reason: "its bare skip says the full Git history holds no build of the generation before merged relic bodies, " +
+	Reason: "its bare skip says the full Git history holds no build of the generation a test asks for, " +
 		"which installing a tool cannot change; missing git or tar, an unreadable history and a shallow checkout " +
 		"all report through MissingCapability",
 }}

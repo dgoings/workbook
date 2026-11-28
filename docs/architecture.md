@@ -2324,6 +2324,7 @@ Spotlight indexing used about two and a half cores during the run.
 | | `relic-fetch-100` | 774 ms | under 60 s | design |
 | Merge | `relic-sync-merge-100` | not yet measured | under 3,000 ms; Git processes at most 1.5 × `relic-fetch-100`'s, plus 100 | benchmark |
 | | `relic-merge-repetitive-1mib` | not yet measured | under 1,000 ms | benchmark |
+| | `sync-divergent-descriptions` | not yet measured | at most 50 ms above `sync-divergent-tips`, and the same Git process count | benchmark |
 | Bodies at their limits | `relic-create-16mib` | 333 ms | | |
 | | `relic-show-16mib` | 98 ms | | |
 | | `relic-edit-part-16mib` | 340 ms | | |
@@ -2333,6 +2334,10 @@ Spotlight indexing used about two and a half cores during the run.
 | History and diffs | `relic-history-100` | not yet measured | 300 ms | benchmark |
 | | `relic-diff-latest-100kib` | not yet measured | 300 ms | benchmark |
 | | `relic-diff-first-last-100kib` | not yet measured | 500 ms | benchmark |
+
+`sync-divergent-descriptions` is a task scenario of the default run, not a
+relic one: `sync-divergent-tips` with a description of 1,000 lines, about
+60 KiB, whose line 10 origin changed and whose line 990 this clone did.
 
 The two merge scenarios were added after that run too. Each times the `sync`
 of a clone whose body saves have to be merged onto saves another clone

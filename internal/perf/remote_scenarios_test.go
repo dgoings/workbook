@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/dgoings/workbook/internal/core"
 	"github.com/dgoings/workbook/internal/gitstore"
+	"github.com/dgoings/workbook/internal/testenv"
 )
 
 func TestDecodeRemoteScenarioResult(t *testing.T) {
@@ -95,6 +97,7 @@ func TestRunRemoteScenariosUsesTopologyCommandsAndVerifiesResults(t *testing.T) 
 		{name: "sync-already-synchronized", command: "sync"},
 		{name: "sync-small-changed-ref-set", command: "sync"},
 		{name: "sync-divergent-tips", command: "sync"},
+		{name: "sync-divergent-descriptions", command: "sync"},
 		{name: "sync-malformed-local-tip", command: "push", expectFailure: true},
 		{name: "sync-malformed-remote-tip", command: "fetch", expectFailure: true},
 	}
@@ -649,6 +652,138 @@ func sleepingRemoteFixtureBuilder(work time.Duration) func(context.Context, stri
 			return RemoteFixture{LocalRoot: root}, nil
 		case <-ctx.Done():
 			return RemoteFixture{}, ctx.Err()
+		}
+	}
+}
+
+// Mutation witness: a scenario missing from the registry or the definitions,
+// or built on another topology, is not measured, or measures something else.
+func TestDivergentDescriptionsScenarioIsRegistered(t *testing.T) {
+	t.Parallel()
+	names := ScenarioNames()
+	after := slices.Index(names, "sync-divergent-tips")
+	if after < 0 || after+1 >= len(names) || names[after+1] != "sync-divergent-descriptions" {
+		t.Fatalf("scenario names = %v, want sync-divergent-descriptions after sync-divergent-tips", names)
+	}
+	definitions, err := selectRemoteScenarioDefinitions([]string{"sync-divergent-descriptions"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []remoteScenarioDefinition{{name: "sync-divergent-descriptions", topology: RemoteDivergentDescriptions, command: "sync"}}
+	if !reflect.DeepEqual(definitions, want) {
+		t.Fatalf("definitions = %+v, want %+v", definitions, want)
+	}
+}
+
+// The smoke-scale run of the scenario, in both object formats: the fixture's
+// two edits are lines 10 and 990 of one 1,000-line description, the real
+// binary merges them, and the verifier accepts that result and no other.
+func TestDivergentDescriptionsFixtureVerifies(t *testing.T) {
+	t.Parallel()
+	workbook := buildRemoteScenarioWorkbook(t)
+	for _, objectFormat := range []string{"sha1", "sha256"} {
+		t.Run(objectFormat, func(t *testing.T) {
+			if objectFormat == "sha256" && !supportsRemoteObjectFormat(t, objectFormat) {
+				testenv.MissingCapability(t, "Git does not support SHA-256 repositories")
+			}
+			var fixture RemoteFixture
+			var measured CommandMeasurement
+			results, err := runRemoteScenarios(context.Background(), RunSpec{
+				WorkbookBinary: workbook,
+				Fixture:        FixtureSpec{TotalTasks: 11, ActiveTasks: 10, TombstonedTasks: 1, OperationsPerTask: 4, ObjectFormat: objectFormat},
+				// A hang guard: nothing here asserts how long anything took.
+				Samples: 1, CommandTimeout: 120 * time.Second,
+			}, filepath.Join(t.TempDir(), "scenarios"), []string{"sync-divergent-descriptions"}, remoteScenarioDependencies{
+				buildFixture: func(ctx context.Context, root string, spec FixtureSpec, topology RemoteTopology) (RemoteFixture, error) {
+					built, err := buildRemoteFixtureWithinTimeout(ctx, root, spec, topology)
+					if err != nil {
+						return built, err
+					}
+					fixture = built
+					assertDivergentDescriptions(t, built)
+					return built, nil
+				},
+				measureCommand: func(ctx context.Context, spec CommandSpec) CommandMeasurement {
+					measured = MeasureCommandOutput(ctx, spec)
+					return measured
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := scenarioOutcome(results[0]); got != "completed" {
+				t.Fatalf("outcome = %q, want completed", got)
+			}
+
+			// The same sync is refused once its result stops being the merge
+			// the scenario is named for.
+			base, local, peer, merged := benchmarkDescriptions()
+			for _, text := range []string{base, local, peer} {
+				if text == merged {
+					t.Fatal("the merged description equals one of its inputs")
+				}
+			}
+			decoded, err := decodeRemoteScenarioResult(measured.Stdout, measured.Stderr, "sync", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			warning := core.DescriptionMergedWarning(fixture.TaskIDs[0], "origin")
+			if err := requireMergedDescription(context.Background(), fixture, []core.Warning{warning}); err != nil {
+				t.Fatalf("verify with one merge warning: %v", err)
+			}
+			if err := requireMergedDescription(context.Background(), fixture, decoded.Warnings); err != nil {
+				t.Fatalf("verify the measured result: %v", err)
+			}
+			if err := requireMergedDescription(context.Background(), fixture, []core.Warning{warning, warning}); err == nil {
+				t.Fatal("two merge warnings verified")
+			}
+			unmerged := fixture
+			unmerged.LocalRoot = fixture.PeerRoot
+			if err := requireMergedDescription(context.Background(), unmerged, []core.Warning{warning}); err == nil {
+				t.Fatal("a tip holding only the peer's edit verified")
+			}
+		})
+	}
+}
+
+// assertDivergentDescriptions checks the built fixture: one shared
+// description of 1,000 lines and about 60 KiB, line 990 edited here and line 10
+// on origin.
+func assertDivergentDescriptions(t *testing.T, fixture RemoteFixture) {
+	t.Helper()
+	assertDivergentChildren(t, fixture)
+	refs := fixture.Expected[fixture.TaskIDs[0]]
+	read := func(revision string) []string {
+		t.Helper()
+		head := strings.TrimSpace(runGit(t, fixture.LocalRoot, "rev-parse", revision))
+		commit, err := readFixtureCommit(context.Background(), fixture.LocalRoot, head)
+		if err != nil {
+			t.Fatal(err)
+		}
+		description := commit.State.Task.Description
+		if len(description) < 58<<10 || len(description) > core.MaxDescriptionBytes {
+			t.Fatalf("description at %s is %d bytes, want about 60 KiB", revision, len(description))
+		}
+		lines := strings.Split(strings.TrimSuffix(description, "\n"), "\n")
+		if len(lines) != 1000 {
+			t.Fatalf("description at %s has %d lines, want 1000", revision, len(lines))
+		}
+		return lines
+	}
+	base := read(refs.Canonical + "^")
+	for name, edit := range map[string]struct {
+		revision string
+		line     int
+	}{"local": {refs.Canonical, 990}, "origin": {refs.Remote, 10}} {
+		edited := read(edit.revision)
+		var changed []int
+		for index := range edited {
+			if edited[index] != base[index] {
+				changed = append(changed, index+1)
+			}
+		}
+		if !slices.Equal(changed, []int{edit.line}) {
+			t.Fatalf("%s changed lines %v, want %d", name, changed, edit.line)
 		}
 	}
 }

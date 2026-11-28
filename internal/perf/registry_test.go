@@ -40,6 +40,7 @@ func TestScenarioNamesReturnsStableDefensiveRegistry(t *testing.T) {
 		"sync-already-synchronized",
 		"sync-small-changed-ref-set",
 		"sync-divergent-tips",
+		"sync-divergent-descriptions",
 		"sync-malformed-local-tip",
 		"sync-malformed-remote-tip",
 		"validate-full-history",
