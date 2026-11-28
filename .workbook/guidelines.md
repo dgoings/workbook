@@ -1,4 +1,4 @@
-<!-- workbook:begin generator=v0.7.0-192-g35896851 sha256=3270112c9b35d8a22f09894fe5ce692c1de7673a39e92b00d34779cd10233489 -->
+<!-- workbook:begin generator=v0.7.0-205-g5d620ee2 sha256=57ea93047476ce64e844340e94e2212f75114554c6fee3c176cf699960da0c7f -->
 # Workbook guidelines
 
 Workbook tracks this project's tasks in Git refs under `refs/workbook/tasks/`
@@ -184,6 +184,75 @@ To see what changed since the version you passed as `--base`, run
 For other edits (the title, a property or field, or adding, moving,
 removing or restoring a part), run `workbook relic update --help`; for
 export, see `workbook relic --help`.
+
+### Link relationships
+
+A link's `--rel` must be one of these, or one the relic's schema adds in
+`links.relationships`; a link made earlier with another name stays readable.
+
+| Name | Read as |
+| --- | --- |
+| `implemented-by` | This part of a spec or plan is built by that task. |
+| `derived-from` | This was drawn from that source. |
+| `summarizes` | This is a summary of that. |
+| `decided-in` | This decision was made in that meeting or transcript turn. |
+| `changes` | This decision changes that part of a spec. |
+| `supersedes` | This relic replaces that one. |
+| `relates-to` | A general connection with no stronger meaning. |
+
+### Writing a spec or a plan
+
+To write a spec:
+
+```sh
+workbook relic create "<title>" --type spec --set status=draft --json
+workbook relic update <relic> --add-part --part-type section --field "title=<title>" --body-file <file.md> --json
+workbook relic update <relic> --add-part --part-type decision --field "title=<question>" --field "chosen=<choice>" --field status=proposed --body-file <file.md> --json
+workbook relic update <relic> --add-part --part-type open-question --field "title=<question>" --body-file <file.md> --json
+workbook relic update <relic> --link <task> --from <part> --rel implemented-by --json
+```
+
+Every part needs `title`; bodies are optional Markdown. Set `status` (`draft`,
+`approved` or `superseded`) with `workbook relic update <relic> --set
+status=approved`. A relic created before the defaults names no schema, and
+`workbook relic migrate <relic> --to spec` adopts the default.
+
+To write a plan:
+
+```sh
+workbook relic create "<title>" --type plan --set status=draft --json
+workbook relic update <relic> --add-part --part-type section --field "title=<title>" --body-file <file.md> --json
+workbook relic update <relic> --add-part --part-type step --field "title=<title>" --field-json 'needs=["<title>"]' --body-file <file.md> --json
+workbook relic update <relic> --link <task> --from <part> --rel implemented-by --json
+```
+
+Every part needs `title`; bodies are optional Markdown. A step's `needs` lists
+the titles of the steps it needs first; leave it out when there are none. Set
+`status` (`draft`, `approved`, `in-progress` or `done`) with `workbook relic
+update <relic> --set status=approved`. A relic created before the defaults names
+no schema, and `workbook relic migrate <relic> --to plan` adopts the default.
+
+### This project's relic types
+
+A relic save is checked against the schema version the relic names, and a
+refusal names the rule it broke. `workbook relic migrate <relic> --to <target>`
+moves a relic to a newer version, and `workbook relic list --behind` lists the
+relics behind. Each type below shows its newest version;
+`workbook schema show <type> --json` gives the full rules.
+
+- `plan`, built-in `workbook:plan:1`
+  - Title: Plan
+  - Description: How a spec gets built: titled sections of context and the steps that build it. Link each step to the task that builds it with implemented-by.
+  - Required properties: `status` (one of `draft`, `approved`, `in-progress`, `done`)
+  - Part `section`: required fields `title`; body optional
+  - Part `step`: required fields `title`; body optional
+- `spec`, built-in `workbook:spec:1`
+  - Title: Spec
+  - Description: A design for one feature or change: titled sections, the decisions it makes and the questions it leaves open.
+  - Required properties: `status` (one of `draft`, `approved`, `superseded`)
+  - Part `decision`: required fields `title`; body optional
+  - Part `open-question`: required fields `title`; body optional
+  - Part `section`: required fields `title`; body optional
 
 ## Machine-readable output
 
