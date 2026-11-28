@@ -1226,7 +1226,8 @@ reaching the board's port.
 Operation IDs are globally unique and independent of Git object IDs. Git commit ancestry provides causal ordering; a logical clock assists validation and deterministic presentation. Wall-clock time is for display only and must not decide semantic conflicts.
 
 The format supports task creation, scalar and label updates, dependency edges,
-tombstones and restores, and assignments. Later CLI and format work is expected
+tombstones and restores, assignments, and
+[description merges](#description-merges). Later CLI and format work is expected
 to add:
 
 - `comment.add`;
@@ -1256,6 +1257,63 @@ deletes first. A damaged ref is left out of it, except a damaged relic ref
 that still resolves to a commit, which Git can bundle and nothing else holds.
 `--no-backup` writes no bundle where it is allowed. See
 [Resetting Workbook data](#resetting-workbook-data).
+
+### Description merges
+
+When a replay meets a description that both sides changed on different lines, it
+appends one `description.merge` operation to the pack it is replaying. It is the
+only operation a task replay adds to a pack. The operation holds the merged text in
+`value`, and in `merge` the local edit it merged in (`other`, an earlier
+description operation of the same pack), the two other texts (`ancestor` and
+`current`) and the method:
+
+```json
+{"format":"workbook.operation-pack","version":1,"minReader":10, …,
+ "operations":[
+  {"id":"01BOBSET…","type":"field.set","field":"description","value":"…Bob's text…"},
+  {"id":"01MERGE…","type":"description.merge","value":"…merged text…",
+   "merge":{"other":"01BOBSET…","ancestor":"…shared text…",
+            "current":"…Alice's text…","method":"line-3way-1"}}]}
+```
+
+The fold sets the description to `value`, as a `field.set` would, and never
+reads the other texts or runs the merge. The texts are held in the operation
+rather than named by commit, because a repeated replay moves the commit onto a
+new parent, where "the parent's text" would no longer be the text that was
+merged. Each is at most 64 KiB, the description limit, so a merge adds at most
+about 192 KiB of text to a pack.
+
+The operation's ID is derived: its time field is the pack's wall time, and its
+random bits come from a SHA-256 digest of the task ID, `other`, the digests of
+`ancestor` and `current`, and the method. A repeated replay of the same tips
+therefore writes the same bytes. A `description.merge` with a field, task,
+comment, attachment or checkpoint member, without a `merge`, with an `other`
+that names no earlier description edit of its pack, with an over-limit text, or
+in a pack declaring a generation below 10, is `corrupt-data`; so is a `merge`
+member on any other operation type.
+
+Alice publishes first and Bob replays onto her edit:
+
+```text
+refs/workbook/tasks/WB-…
+ c0 (description "one\ntwo\nthree\n")
+ ├── a1 (Alice: field.set description "one\nTWO\nthree\n")         origin's tip
+ │    └── b1' operation.json [field.set 01BOBSET "one\ntwo\nTHREE\n",
+ │                            description.merge 01MERGE value "one\nTWO\nTHREE\n",
+ │                              other 01BOBSET, ancestor c0's text, current a1's text]
+ │                                                                   minReader 10
+ │        state.json         description "one\nTWO\nTHREE\n", minReader 10
+ └── b1 (Bob: field.set 01BOBSET)    parked at refs/workbook/reconciled/<task-id>/<n>
+```
+
+`b1'` has the single parent `a1`. The merge is not a second Git parent. Bob's
+original commit stays reachable through the parked ref.
+
+When Carol publishes an edit of other lines before Bob's `b1'` is published, the
+next fetch replays `b1'` again and appends a second merge, whose `other` is the first:
+`[field.set, merge M1, merge M2]`. The rules for when a replay merges, and what
+it reports, are in
+[Merged descriptions](reference.md#merged-descriptions).
 
 ### Assignments
 
@@ -1469,6 +1527,7 @@ than per release:
 | 7 | the relic operations `relic.retire`, `relic.unretire` and `history.checkpoint` |
 | 8 | a `relic.create` or `relic.migrate` that names a [built-in schema](#relic-schemas) |
 | 9 | the relic operation `part.body.merge`; see [Merged bodies](#merged-bodies) |
+| 10 | the task operation `description.merge`; see [Description merges](#description-merges) |
 
 Generations 5 and 8 are decided by an operation's payload rather than its type: a
 `field.set` of any other field is still generation 0, and so is a create with no
@@ -1476,12 +1535,26 @@ due date; see [Due dates](#due-dates) for why. A `relic.create` or
 `relic.migrate` that names a project version, or none, stays at generation 6.
 
 Generations 6 to 9 belong to relics, and 6 to project schemas too. None marks
-a task pack, so a task history is written exactly as before. A relic pack carries
+a task pack. Generation 10 is the first task generation since 5, and marks task
+packs only: a relic pack marked 10 is `corrupt-data`. A task that never had a
+description merged, or a due date, is written exactly as before. A relic pack carries
 the generation its operations need, and a state the larger of its parent's and
 its pack's. It marks a configuration pack only when the pack holds a
 `schema.put`, or is a genesis that carries a `schemas` section; a configuration
 history with no schema is written exactly as before. See
 [Relic refs](#relic-refs) and [Relic schemas](#relic-schemas).
+
+**Description merges and an older Workbook.** A merge puts generation 10 on its
+pack, and on every state after it until a compaction. Any build with a lower
+generation, v0.5.0 and later, reads the task from its stored state with the
+merged text and `newerWriter: true`, refuses every change to it with exit `9`,
+and has `validate` report it `newer-writer`. Its sync fast-forwards when it has
+nothing of its own on the task, and otherwise reports `needs-upgrade`, exits `9`
+and moves neither ref, so the held change publishes after the upgrade. Nothing is
+lost. A compaction folds the merge into the checkpoint, which declares
+generation 4, or 5 with a due date, so a build that reads compacted tasks, such
+as v0.7.0, can change the task again. The merge record goes with the replaced
+history.
 
 **Schemas and an older Workbook.** A project's first schema puts generation 6
 on its configuration history, and the checkpoint keeps it from then on. A
@@ -1801,7 +1874,8 @@ checkpoint in a generation the clone does not have:
 - Otherwise the local-only operations, those neither in the list nor on origin
   since the checkpoint, are replayed onto it as ordinary single-parent commits
   in the new generation, keeping their actor, wall time and operation IDs. This
-  does not need `compactedFrom` to be present locally.
+  does not need `compactedFrom` to be present locally. A description changed on
+  both sides is [merged](#description-merges) as in any replay.
 - Unlike an ordinary reconcile, the old local tip is not parked, since parking
   it would keep the history alive. The task's reflog, and those of its
   existing parked refs whose edits the checkpoint already carries, are dropped
@@ -1933,6 +2007,19 @@ model is:
 6. Push that task ref.
 7. If the remote changed concurrently, the next fetch replays onto its new tip.
 
+A replay judges each local commit against the description in that commit's own
+Git parent: that is the ancestor of its description edit, whatever the shared
+base of the two histories is. When the fetched tip's description differs from
+both the ancestor and the local result, the two are merged line by line. A clean
+merge appends a [`description.merge`](#description-merges) operation to the
+replayed pack. The replay otherwise rewrites only the pack's logical clock, and
+across a compaction its history generation; a merge also raises the pack's
+`minReader` to 10. A merged text equal to the fetched text is still appended,
+because the pack's `field.set` would otherwise overwrite that text, and when
+nothing else in the pack changes the task the replay writes no commit. A replay
+across a compaction records every pack, so there such a commit is written. The
+replay of origin's packs onto a local checkpoint never merges.
+
 Most operations converge because they touch different fields. Meaningful
 contradictions are surfaced rather than silently hidden, through the three
 conflicts described in
@@ -1969,6 +2056,15 @@ Recording the parking point would close that gap; it is local bookkeeping,
 not a format change, and is not done yet.
 
 Exclusive claims are different. When `--remote-required` is used, a claim succeeds only after the remote accepts a fast-forward update based on the task ref that was fetched. If another agent claimed the task first, Workbook refetches and reports that the claim failed instead of merging two exclusive claims. Offline claims, if supported, must be visibly tentative.
+
+For a description these are guarantees: every stored text is one side's whole
+text, the result of applying whole operations in order, or a recorded merge of a
+local and a fetched text; the merge never overwrites a change silently or stores
+conflict markers; the same texts give the same merged text and operation ID; and
+only the replaying clone runs the merge. These are best effort: whether two edits
+merge depends on the line method, a clean merge can still be wrong in meaning,
+and in a run of identical lines a change can land one line away, or two
+deletions of one copy each can be taken once.
 
 **Relics.** A relic is reconciled by the same replay, with its own rules,
 because its values are whole documents rather than task fields. The clone that
@@ -2207,13 +2303,16 @@ WB-R-01M8FNC4Y9ZSCQ6E309E1H65GQ|01M8FNC6ZRCDBFDN2Y8MMKD43C|01M8FNC5BNK2SV4A47G38
 WB-R-01M8FNC4Y9ZSCQ6E309E1H65GQ|01M8FNC7256KH6HRKR57JKYA3D|01M8FNC5BNK2SV4A47G38AB5Y2|relic|WB-R-01M8FNC5V9NMQTZ105DPV173BC|01M8FNC69QHEMTG2FA0F80KBKR|changes|01M8FNC69QHEMTG2FA0F80KBKR|
 ```
 
-The cache, with the relic tables and `relic_links`, is schema version 14; a
+The cache, with the relic tables and `relic_links`, is schema version 15; a
 cache of another version is replaced by the first command this build runs, and
-an older build replaces a version 14 cache the same way. Version 13 added the
+an older build replaces a version 15 cache the same way. Version 13 added the
 compaction and stub columns above. Version 14 changed no table: a stored judgment
 now covers a relic's links and the built-in schemas, so the cache of an earlier
 build, which could say `conforms` for a relic whose links do not fit, is
-replaced.
+replaced. Version 15 changed no table either: a stored task operation now keeps
+the `merge` member of a [description merge](#description-merges). An earlier
+build that indexed a merged task kept its operation without that member, which
+cannot be folded, so its cache is replaced.
 A relic the index cannot hold is reported by a reverse lookup as unread, with
 a `relic-links-unread` warning, rather than read from Git, so the lookup stays
 one query and a damaged relic's links stay out of sight from the task until it

@@ -203,8 +203,10 @@ Team members explicitly share task refs through the repository's `origin`
 remote. Workbook fetches only its private task namespace, validates current
 task tips and their safe ancestry relationships in isolated tracking refs, and
 leaves the checked-out code branch untouched. Local work that `origin` does not
-have is replayed onto the fetched tip and published; the few concurrent
-situations Workbook will not decide are reported rather than resolved for you.
+have is replayed onto the fetched tip and published, and a task description both
+sides changed on different lines is
+[merged](docs/reference.md#merged-descriptions); the few concurrent situations
+Workbook will not decide are reported rather than resolved for you.
 A team can require synchronization by committing a tracked project policy that
 outranks personal preferences.
 

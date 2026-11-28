@@ -882,7 +882,7 @@ func TestDocsDocumentRelicLinks(t *testing.T) {
 		}
 	}
 	projection := docSection(architecture, "## SQLite projection")
-	for _, required := range []string{"`seen`", "`pointer`", "schema version 14", "one query"} {
+	for _, required := range []string{"`seen`", "`pointer`", "schema version 15", "one query"} {
 		if !strings.Contains(projection, required) {
 			t.Errorf("the architecture's SQLite projection section is missing %q", required)
 		}
@@ -1071,7 +1071,7 @@ func TestDocsDocumentRelicSchemas(t *testing.T) {
 
 	architecture := strings.Join(strings.Fields(repositoryDoc(t, "docs", "architecture.md")), " ")
 	for _, required := range []string{
-		"schema.put", "relic-schema-", "relic.migrate", "schema version 14", "workbook.relic-schema",
+		"schema.put", "relic-schema-", "relic.migrate", "schema version 15", "workbook.relic-schema",
 		"relic-schema-renumbered",
 	} {
 		if !strings.Contains(architecture, required) {

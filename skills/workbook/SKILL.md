@@ -228,6 +228,15 @@ Run `workbook fetch`, `workbook sync`, or `workbook push` only when explicitly
 asked, to reconcile after exit code 6, or to get the latest relics before
 reading one.
 
+A task description changed here and on `origin` on different lines is merged,
+with the warning `description-merged`; you have nothing to do then. A
+`description` conflict (exit 8, in the envelope's `conflict` list) means the two
+edits changed the same or adjacent lines, or could not be merged otherwise. Its
+`base`, `ours` and `theirs` hold the three texts, and `theirs` stands. When your
+intent is clear, combine your edit with `theirs` and save it with
+`workbook update <full-id> --description "<text>" --json`; otherwise show the
+user both versions and ask. Make again any other change the conflict dropped.
+
 ## Common mistakes
 
 - Use this project's own machine values, read from `.workbook/guidelines.md` or

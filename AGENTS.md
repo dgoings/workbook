@@ -38,6 +38,7 @@ Preserve these decisions unless the user explicitly changes them and the documen
 
 - Make operations idempotent and deterministic when applied to the same causal history.
 - Treat meaningful concurrent scalar edits as domain conflicts unless an explicitly documented resolution rule applies.
+- A task description edited on both sides of a replay is merged line by line when the edits do not touch. The replay appends a `description.merge` operation that stores the result, and no other clone recomputes it. Touching or unmergeable edits stay a `description` conflict.
 - Prefer multi-value conflict visibility over silently discarding a user's or agent's intent.
 - Model collection changes with operation semantics that support concurrent add/remove behavior.
 - Use remote compare-and-swap behavior for exclusive claims. Do not CRDT-merge two claims and call the result exclusive.

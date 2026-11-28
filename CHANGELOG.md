@@ -38,6 +38,17 @@ every Workbook on a machine before creating one; see Compatibility across
 versions below.
 
 ### Added
+- **Task description edits on different lines merge automatically.** When a
+  synchronization replays a description edit onto another clone's edit and the
+  two changed different lines, Workbook stores the combined text once, as a
+  recorded `description.merge` operation, with a `description-merged` warning.
+  Other clones read the stored text. Changes to the same or adjacent lines, and
+  descriptions that cannot be merged safely, stay a `description` conflict,
+  unchanged. `show --history` marks a merge, with a `merge` member in JSON. The
+  generated guidelines and the skill say what an agent does; run `workbook docs
+  update` to refresh them. See [Merged
+  descriptions](docs/reference.md#merged-descriptions) and [the stored
+  format](docs/architecture.md#description-merges).
 - **Body edits on different lines merge automatically.** When two saves of one
   part's body started from the same version and changed different lines,
   Workbook stores the combined text once, as a recorded merge, in a sync or in
@@ -259,6 +270,10 @@ versions below.
   benchmarks](docs/architecture.md#relic-benchmarks).
 
 ### Changed
+- **Two description edits in a row no longer conflict** when the other clone
+  changed only something else, such as the status. A replay now compares each
+  local edit with the text it started from, in its own parent commit, rather than
+  with the last text the two clones shared.
 - **`relic update --base <older version>` merges, or exits 8,** where it was
   refused with exit 6. It merges when the file and the newer body changed
   different lines. Otherwise it records nothing and reports a relic conflict
@@ -281,8 +296,9 @@ versions below.
   parts: each link's relationship, then its pointer, including links from removed
   parts. A relic under a schema that holds another relationship name reads
   `not-conforming`.
-- **The cache moves to schema version 14**, which is rebuilt once, because stored
-  judgments now cover links and built-ins.
+- **The cache moves to schema version 15**, which is rebuilt once, because stored
+  judgments now cover links and built-ins, and a stored task operation now keeps
+  a description merge.
 - **A move concerns this project's refs only.** A task or relic ref at the old
   place whose name is not one of this project's task or relic IDs, under any
   key it has had, is another project's or no project's, and `workbook
@@ -308,6 +324,15 @@ versions below.
   refuse a version the compaction dropped as `not-found`.
 
 ### Compatibility across versions
+- **A task with a merged description needs a build with this change to be
+  changed.** A merge is written at writer-format generation 10. v0.5.0 through
+  v0.7.0, and any build from before merged descriptions, show the task with the
+  merged text and refuse to change it (exit 9, `newer-writer`), until they are
+  upgraded. One that holds its own unpublished change to the task reports
+  `needs-upgrade` and moves nothing, and publishes the change after the upgrade,
+  so nothing is lost. A task that never had a merge is written as before, and
+  compacting a merged task makes it changeable again by a build that reads
+  compacted tasks, v0.7.0 included.
 - **A merged relic needs a build with this change to be changed.** A merge is
   written at writer-format generation 9. A build from before merging shows the
   relic from its stored state, refuses `relic update` and `relic diff` as
@@ -338,7 +363,8 @@ versions below.
   built-in, and a relic on the older one is behind only for whoever runs it.
 - **A Workbook from before relics works beside them otherwise.** v0.6.1 and
   v0.7.0 read, change and synchronize tasks in a checkout that holds relics,
-  and leave the relics at a remote alone.
+  and leave the relics at a remote alone. A task with a merged description is the
+  exception to changing them, as above.
 
 ## v0.7.0 — 2026-11-23
 

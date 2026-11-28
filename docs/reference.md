@@ -5535,7 +5535,8 @@ real diff, so Workbook computes a word-level diff and marks it the way
 `git diff --word-diff` does: `Alpha beta [-gamma-]{+delta+}`. In `--json` that
 diff is a list of `{kind, text}` spans, and concatenating the equal and delete
 spans reproduces the old text exactly while the equal and insert spans reproduce
-the new one.
+the new one. A change that holds a [merged description](#merged-descriptions)
+is one `description` change with a `merge` member and an extra line in text.
 
 Entries are ordered by the parent chain, not by wall time, and wall time is
 printed as attribution only. Replay preserves an operation's wall time while
@@ -6082,11 +6083,15 @@ commits, because it was edited there after the copy or because an edit was
 carried onto its history, is `carried`. An operation the new place lacks is
 applied once on top of its history by the ordinary replay, which skips every
 pack that history already records, so a rerun never writes an operation twice.
+A description both places changed on different lines is
+[merged](#merged-descriptions) by that replay, with a `description-merged`
+warning that names the old place.
 One that conflicts with the new place's history is set aside instead: the old
 place's history for that task is parked in this checkout under
 `refs/workbook/reconciled/<task>/<n>`, and the run finishes and exits 8. Its
 message names each task by title and ID and says why its edit cannot apply:
-that its description was changed at both places, that it was deleted at the
+that its description was changed at both places in a way that could not be
+merged, that it was deleted at the
 new place so the old place's change to one of its fields cannot apply, or that
 the old place's dependency would close a cycle at the new place. It says the
 text is kept in this clone under the parked ref, that `workbook serve` run from
@@ -6447,7 +6452,9 @@ reach `origin` knows it, and deferring would swallow the warning that says the
 work is local-only.
 
 The watcher writes to standard error as it goes: a line for each conflict it
-meets, and `workbook: background sync failed: <message>` when a round fails,
+meets, a `workbook: description-merged: <message>` line for each
+[description it merges](#merged-descriptions), and
+`workbook: background sync failed: <message>` when a round fails,
 where the message is Git's own with the credentials of configured addresses
 removed, as [the hosted board's exposure list](#what-anyone-who-can-open-the-board-can-do-and-see)
 details. A token in an address's path or query string, and anything a
@@ -6498,9 +6505,11 @@ operations `origin` does not, the fetch replays the local ones onto the fetched
 tip. The canonical task ref moves to the last replayed commit, the orphaned
 local tip is parked at `refs/workbook/reconciled/<task-id>/<n>` in the same
 compare-and-swap transaction, and every replayed pack keeps its actor, wall
-time, and operation IDs, rewriting only its logical clock. Replayed commits have
-exactly one parent; Workbook writes no merge commits, never rebases a shared ref,
-and never force-pushes one unconditionally.
+time, and operation IDs, rewriting only its logical clock. A pack whose
+description is [merged](#merged-descriptions) also gains one
+`description.merge` operation. Replayed commits have exactly one parent;
+Workbook writes no merge commits, never rebases a shared ref, and never
+force-pushes one unconditionally.
 
 The command line reports a conflict once, on the run that meets it, and has no
 command that lists or removes parked tips. `workbook serve` shows every edit a
@@ -6510,7 +6519,9 @@ dismisses it; see [Edits the board's sync set aside](#edits-the-boards-sync-set-
 Most concurrent edits touch different fields, commute, and replay silently, so a
 mutation that loses a push race and a fetch that finds week-old local work both
 republish without asking anything. A replayed operation whose value `origin`
-already holds records no commit at all. Every other concurrent field change is
+already holds records no commit at all. A description both sides changed is
+[merged](#merged-descriptions) when the two edits changed different lines, and
+is a conflict otherwise. Every other concurrent field change is
 last-syncer-wins.
 
 Each conflict carries a `remote` member naming the remote it was met with
@@ -6529,7 +6540,7 @@ Exactly three situations stop a task's replay:
 
 | Type | Situation | Reported detail |
 | --- | --- | --- |
-| `description` | both sides changed the description | `base`, `ours`, `theirs` |
+| `description` | both sides changed the same lines of the description, or the edits cannot be [merged](#merged-descriptions) | `base`, `ours`, `theirs` |
 | `dependency-cycle` | a replayed dependency closes a cycle against the fetched graph | the edge and the closing path |
 | `tombstone` | `origin` tombstoned a task a local operation still edits | the blocked operation |
 
@@ -6573,6 +6584,256 @@ goes only when somebody dismisses it on the board, or when a manual
 after writing it to the backup bundle unless told `--no-backup`. Fetches and reads
 never prune them: a fetch must not delete recoverable work in the command that
 orphaned it.
+
+### Merged descriptions
+
+When a replay meets a description that both sides changed, and the two edits
+changed different lines, Workbook stores the combined text once, as a recorded
+merge. It does so only in a replay, whichever command ran the fetch that led to
+it. `workbook update --description` itself never merges: it replaces the whole
+description with the text it is given.
+
+The replay judges each local change by itself, oldest first. It reads three
+texts:
+
+- the **ancestor**: the description just before that local change, in the parent
+  of its own commit;
+- the **local** text: the description just after it;
+- the **fetched** text: the description of the commit it is replayed onto.
+
+| The three texts | The replay |
+| --- | --- |
+| The fetched text equals the ancestor: the other side left the description alone | applies the change as it is |
+| The local text equals the fetched text: both sides hold the same words | applies the change as it is, with no merge |
+| Anything else, and the two edits changed different lines | records a merge |
+| Anything else | stops with a `description` conflict |
+
+The other fields the same change sets apply as usual, in the same commit.
+Because the ancestor is the change's own parent, two description edits made in a
+row here do not conflict with each other when the fetched side changed only
+other fields.
+
+A task that is deleted on the fetched side gives a `tombstone` conflict first,
+whatever its description. Titles and every other field are never merged.
+
+Each merge joins one local text to one fetched text. A third clone's edit meets
+the stored merged text, so three clones merge one after another in the order
+they publish. A merged commit that is still unpublished when the next fetch
+brings an edit of other lines is replayed again, and merged again onto that
+edit; its change then holds both merges.
+
+A replay onto a checkpoint that a teammate's [compaction](#task-archive-compaction)
+published merges the same way, and so does the replay
+[`workbook move-tasks`](#a-tasks-remote-other-than-origin) makes when it carries
+an edit to the new place. The one replay that never merges is the replay of
+`origin`'s changes onto a checkpoint this clone made: there `origin`'s version
+wins and the conflict is reported.
+
+#### An example
+
+Alice and Bob start from a five-line description. Bob changes the last line with
+`--no-sync`, Alice changes the second line and publishes it, and Bob
+synchronizes:
+
+```sh
+# bob
+workbook update WB-01M8GVAB1QG3VJ94Q4WKMG0E28 --description "$(cat bob.md)" --no-sync
+# alice
+workbook update WB-01M8GVAB1QG3VJ94Q4WKMG0E28 --description "$(cat alice.md)"
+# bob
+workbook sync
+```
+
+```text
+Fetch:
+WB-01M8GVAB1QG3VJ94Q4WKMG0E28	reconciled	replayed 1 local operation(s); 0 already applied upstream
+Push:
+WB-01M8GVAB1QG3VJ94Q4WKMG0E28	published
+workbook: warning: task WB-01M8GVAB1QG3VJ94Q4WKMG0E28: the description was changed here and on origin; the two edits changed different lines and were merged; `workbook show WB-01M8GVAB1QG3VJ94Q4WKMG0E28 --history` shows the merge
+```
+
+The sync exits `0`, and the description of the task now holds both edits:
+
+```text
+Description:	Open the notes.
+	Read all three decisions.
+	Check the bundle.
+	Write the summary.
+	Publish it on Friday.
+```
+
+`workbook show WB-01M8GVAB1QG3VJ94Q4WKMG0E28 --history` marks Bob's change:
+
+```text
+846e4dc9d2b90bb53a97a5c63fe34e070150aa6d	2026-11-28T05:30:51-05:00	bob@example.com	changed description
+	Description:	Open the notes. Read all three decisions. Check the bundle. Write the summary. Publish [-it.-]{+it on Friday.+}
+		merged two edits that changed different lines (line-3way-1)
+```
+
+Later both change the third line. Alice publishes first, and Bob's sync stops.
+Nothing is merged, Alice's text stands, Bob's edit is parked, and the command
+exits `8`:
+
+```text
+Fetch:
+WB-01M8GVAB1QG3VJ94Q4WKMG0E28	conflicted	the description changed here and on origin; reapply the wanted text
+Push:
+WB-01M8GVAB1QG3VJ94Q4WKMG0E28	up-to-date
+Conflict:	WB-01M8GVAB1QG3VJ94Q4WKMG0E28	description	the description changed here and on origin; reapply the wanted text
+	base:	Open the notes. Read all three decisions. Check the bundle. Write the summary. Publish it on Friday.
+	ours:	Open the notes. Read all three decisions. Check the bundle twice. Write the summary. Publish it on Friday.
+	theirs:	Open the notes. Read all three decisions. Verify the bundle. Write the summary. Publish it on Friday.
+workbook: task WB-01M8GVAB1QG3VJ94Q4WKMG0E28: the description changed here and on origin; reapply the wanted text
+```
+
+#### When a description is not merged
+
+The texts are split into lines and compared as [relic bodies
+are](#how-lines-are-merged). Changes that touch are an overlap, so edits to the
+same line, or to **adjacent** lines such as line 3 and line 4, are not merged.
+Two additions to an empty description overlap too. The edits are also not merged
+when:
+
+- comparing one side with the ancestor passes 2,000 inserted plus deleted lines,
+  counted after the lines the two share at the start and end are set aside, or
+  the work budget of 67,108,864 steps (2^26);
+- the merged text would be over 64 KiB, the [limit for a
+  description](#what-a-task-may-hold); or
+- one of the three texts is not valid UTF-8.
+
+These bounds may be raised in a later release and never lowered. Every one of
+these cases is the ordinary `description` conflict, with no member that says
+which case it was. `base` is the ancestor, the description just before the local
+change that stopped the replay. `ours` is the description just after that change
+here, and `theirs` is the fetched description it met. For a change that an
+earlier sync had already merged and not published, `ours` is that merged text.
+
+#### What a description merge guarantees
+
+- **No silent overwrite.** A replay that meets a description both sides changed
+  keeps what each side changed from the ancestor, or stops with a conflict. It
+  never writes a conflict marker or a partly merged text. The exception is the
+  replay of `origin`'s changes onto this clone's checkpoint, described above,
+  where `origin`'s description wins and the conflict is reported.
+- **Determinism.** The same three texts give the same merged text. The merge
+  operation's ID is derived from its inputs and the change's recorded wall time,
+  so replaying the same tips gives the same operations. The merge runs only on the
+  clone that replays. Every other clone reads the stored text.
+- **Nothing lost.** The local text and the fetched text both stay in the task's
+  history, until a compaction replaces that history.
+- **Best effort: repeated lines.** As for [relic bodies](#what-is-guaranteed), in
+  a run of identical lines which copy a change touched is a guess. A change can
+  land one line away from where it was made, and two sides that each deleted one
+  copy can be read as having made the same deletion, which is then taken once.
+- **Best effort: whether two edits merge depends on the method.** A clean line
+  merge can still be wrong in meaning, for example when two lines that no longer
+  agree were changed apart. The merge is recorded and marked, so read it with
+  `show --history`, and undo it by saving the description you want over it.
+
+#### What a merge records
+
+The replayed change gets one more operation, of type `description.merge`, as its
+last:
+
+| Member | Value |
+| --- | --- |
+| `id` | A ULID derived from the merge's inputs. |
+| `type` | `description.merge` |
+| `value` | The merged text. It is the description from that operation on. |
+| `merge.other` | The ID of the local edit merged in: an earlier `field.set` of the description, or an earlier `description.merge`, in the same change. |
+| `merge.ancestor` | The ancestor text. |
+| `merge.current` | The fetched text it was merged onto. |
+| `merge.method` | `line-3way-1`, the method that made it. |
+
+The texts are stored in the operation itself, so reading a merge needs no other
+commit. A replay that is repeated moves the commit onto a new parent, and the
+record stays true. A merged text that equals the fetched text, with nothing else
+in the change, records no commit and gives no warning. Across a compaction every
+replayed change is written, so there a local edit whose result the checkpoint
+already holds is written with its merge, and reports nothing.
+
+In `workbook show <task> --history --json`, a change that holds a merge has one
+`description` entry in `fields`, of `kind` `set`, from the description before the
+change to the description after it. It carries `merge`:
+
+```json
+{"field":"description","kind":"set","from":"…","to":"…","diff":[…],
+ "merge":{"operation":"01M8GVABR4BBYXXSDBZ7P9KZNX","method":"line-3way-1",
+  "ancestor":"…","other":"…","current":"…"}}
+```
+
+| Member | Value |
+| --- | --- |
+| `merge.operation` | The ID of the `description.merge` operation. |
+| `merge.method` | Its `method`. |
+| `merge.ancestor` | The ancestor text. |
+| `merge.other` | The text merged in: the value of the operation `merge.other` names. After a repeated replay this is the earlier merge's text. |
+| `merge.current` | The text it was merged onto. |
+
+The entry's `summary` stays `changed description`, and the text output adds the
+line `merged two edits that changed different lines (line-3way-1)` below the
+description's diff. When a change holds two merges, the entry describes the last
+one. Plain `workbook show` is unchanged, `data.description` being the stored
+merged text, and `--compare` carries no `merge`.
+
+#### The warning
+
+A merge needs nothing from anyone. It does not change a command's exit status,
+the old local tip is parked as in every reconciliation, and the result is
+published like any other replayed change. The command that made it reports one
+`description-merged` warning for each merge whose text differs from the fetched
+text:
+
+```text
+task <id>: the description was changed here and on <remote>; the two edits changed different lines and were merged; `workbook show <id> --history` shows the merge
+```
+
+`<remote>` is `origin`, or the project's tasks remote when its settings name
+another. In a merge `move-tasks` makes while it carries an edit, it is the place
+the tasks are moving from.
+
+The warning is in `warnings` under `--json`, and in text it is a
+`workbook: warning:` line on standard error. These report it:
+
+- `fetch`, `sync` and `setup`. In text, `setup` prints it as a `Warning:` line on
+  standard output.
+- every task command's own synchronization, `next` among them, and a command
+  stopped by a conflict on another task or its own;
+- relic commands, and the `status`, `priority`, `key` and settings commands, when
+  their synchronization replays a task;
+- `compact` and `compact --adopt`;
+- `move-tasks`, on standard error too when the run stops without verifying the
+  move;
+- a watcher, `workbook sync --watch` or the loop of `workbook serve`, on its own
+  terminal as `workbook: description-merged: <message>`. A command handed to a
+  watcher does not repeat it.
+
+Two cases report nothing. A command that fails for another reason after its
+fetch, such as naming a task that does not exist, does not carry the warning.
+Neither does the fetch `workbook serve` makes before a change to the project's
+settings when no watcher answers. In both the merge is still recorded, and
+`show --history` shows it.
+
+#### Merged descriptions and older versions
+
+A change that holds a merge is written at writer-format generation 10. Releases
+before merged descriptions, v0.5.0 through v0.7.0 included, can still read such a
+task and cannot change it:
+
+- `list`, `show`, `next` and the board show it from its stored state, with the
+  merged text, `newerWriter: true` and the `newer-writer` advisory;
+- every change to that task is refused with exit `9` (`newer-writer`), and
+  `validate` reports it as `newer-writer`, not as damage;
+- its sync fast-forwards onto the merged task when it has nothing of its own for
+  it. When it holds an unpublished change to the task, it reports the task
+  `needs-upgrade`, exits `9`, and moves neither its ref nor `origin`'s.
+
+Nothing is lost: the held change publishes on the first sync after the upgrade.
+Other tasks are unaffected, and a task that never had a merge is written exactly
+as before. [Compacting](#task-archive-compaction) a merged task folds the merge
+into its checkpoint, which an older build that reads compacted tasks, v0.7.0
+included, can change again. The merge record goes with the replaced history. See
+[Mixed Workbook versions](architecture.md#mixed-workbook-versions).
 
 ## Task archive compaction
 
@@ -6895,7 +7156,8 @@ When origin's changes are replayed onto a local checkpoint and one clashes with
 a local change, `origin`'s version wins, as in an ordinary reconcile: the
 conflict is reported, the task is `conflicted`, and the local tip from before
 the sync is parked under `refs/workbook/reconciled/<id>/<n>` so its text can be
-recovered.
+recovered. That replay never [merges a description](#merged-descriptions); a
+replay of local changes onto `origin`'s checkpoint does.
 
 **Adopting drops some local data without a backup.** An adopted task's reflog
 is deleted, and so are those of its parked refs under
@@ -8685,8 +8947,9 @@ project is rebuilt without being asked.
 
 When the board's own background sync fetches a task that changed on `origin`
 while the board had unpublished edits to it, it replays those edits onto
-`origin`'s history. A replay that meets a conflict — a description both sides
-rewrote, an edit to a task `origin` deleted, a dependency that would close a
+`origin`'s history. A description both sides changed on different lines is
+[merged](#merged-descriptions). A replay that meets a conflict — a description
+both sides changed on the same lines, an edit to a task `origin` deleted, a dependency that would close a
 cycle — stops there: `origin`'s side is kept, and the edit, with every later
 unpublished edit to that task, is left out. This is the same reconciliation
 `workbook sync` runs, and as there the old local tip is kept under
@@ -8765,7 +9028,8 @@ The poll's `presentation` carries, for a task with set-aside edits, a
 board's card says how many edits are set aside, and the task page shows each
 one — who, when, the field and the value, drawn through the same cleaning as
 every other text — with a button to copy a description or comment and one to
-dismiss.
+dismiss. A merge among those operations is shown by its type,
+`description.merge`, with its text on one line.
 
 `DELETE /api/tasks/<id>/set-aside` takes `{"parkedRef": …, "parked": …}` from
 an edit it was shown and deletes that parked ref, which removes every edit it
@@ -9901,6 +10165,11 @@ patterns name only `refs/workbook/tasks/*`, so publishing `refs/workbook/project
 is invisible to a teammate who has not upgraded, and the tracked document keeps
 its identity fields for them to read. Nothing breaks until a project deliberately
 upgrades its tracked document, and by then every clone should be on v0.5.0.
+
+A change to one record can need a newer Workbook. A task whose description was
+[merged](#merged-descriptions) is read by v0.5.0 and later releases from before
+merging, and changed by none of them until they are upgraded; see
+[Merged descriptions and older versions](#merged-descriptions-and-older-versions).
 
 Forks copy branches, not Workbook refs — but a fork of a project that committed
 `.workbook/config.json` copies that file, and its advisory identity is exactly
