@@ -70,7 +70,7 @@ func TestSchemaEvaluationEdgeCases(t *testing.T) {
 		}
 	}
 	relic := RelicData{Type: "spec", Properties: map[string]json.RawMessage{"r": json.RawMessage(`null`)}}
-	if problem := schema.CheckRelic(relic, nil); problem != nil {
+	if problem := schema.CheckRelic(relic, nil, nil); problem != nil {
 		t.Errorf("a present null passes required: %s", problem)
 	}
 	if got := problemString(schema.CheckProperty("list", json.RawMessage(`["a",1]`))); got != `property "list": at /1: the value must be a string (type)` {
@@ -127,17 +127,17 @@ func TestCheckRelicNamesTheFirstProblem(t *testing.T) {
 		func() { relic.Parts[2].Body = nil },
 	}
 	for index, want := range steps {
-		if got := problemString(schema.CheckRelic(relic, fields)); got != want {
+		if got := problemString(schema.CheckRelic(relic, fields, nil)); got != want {
 			t.Errorf("step %d: %s, want %s", index, got, want)
 		}
 		fix[index]()
 	}
-	if problem := schema.CheckRelic(relic, fields); problem != nil {
+	if problem := schema.CheckRelic(relic, fields, nil); problem != nil {
 		t.Errorf("the fixed relic: %s (the removed part must not be judged)", problem)
 	}
 
 	open := mustCompileSchema(t, "spec", `{}`)
-	if problem := open.CheckRelic(relic, fields); problem != nil {
+	if problem := open.CheckRelic(relic, fields, nil); problem != nil {
 		t.Errorf("an empty schema refused: %s", problem)
 	}
 	if got := (RelicSchemaProblem{Where: "part 3 (section)", Keyword: "parts", Message: "m"}).String(); got != "part 3 (section): m (parts)" {
@@ -260,7 +260,7 @@ func TestSchemaCheckWithFanningRefsIsQuick(t *testing.T) {
 			func() *RelicSchemaProblem { return schema.CheckProperty("a", value) }, "<nil>")
 		relic := RelicData{Type: "spec", Properties: map[string]json.RawMessage{"a": value}}
 		requireQuickCheck(t, fmt.Sprintf("relic, %d levels, fits", levels),
-			func() *RelicSchemaProblem { return schema.CheckRelic(relic, nil) }, "<nil>")
+			func() *RelicSchemaProblem { return schema.CheckRelic(relic, nil, nil) }, "<nil>")
 
 		// d32, the last rule, judges the value 31 levels below the
 		// properties; the property itself is the first of them.
@@ -270,7 +270,7 @@ func TestSchemaCheckWithFanningRefsIsQuick(t *testing.T) {
 			func() *RelicSchemaProblem { return schema.CheckProperty("a", bad) }, want)
 		relic = RelicData{Type: "spec", Properties: map[string]json.RawMessage{"a": bad}}
 		requireQuickCheck(t, fmt.Sprintf("relic, %d levels, does not fit", levels),
-			func() *RelicSchemaProblem { return schema.CheckRelic(relic, nil) }, want)
+			func() *RelicSchemaProblem { return schema.CheckRelic(relic, nil, nil) }, want)
 	}
 }
 
@@ -370,10 +370,13 @@ func TestSchemaEnumAndConstCompareNumbersByValue(t *testing.T) {
 
 func TestCheckLinkPointerWhere(t *testing.T) {
 	schema := mustCompileSchema(t, "transcript", `{"links":{"pointer":{"type":"object","properties":{"at":{"type":"string"}}}}}`)
-	if problem := schema.CheckLinkPointer(json.RawMessage(`{"at":"1"}`)); problem != nil {
+	pointed := func(pointer string) RelicLink {
+		return RelicLink{Rel: "relates-to", Pointer: json.RawMessage(pointer)}
+	}
+	if problem := schema.CheckLink("link", pointed(`{"at":"1"}`)); problem != nil {
 		t.Fatalf("a fitting pointer: %v", problem)
 	}
-	problem := schema.CheckLinkPointer(json.RawMessage(`{"at":1}`))
+	problem := schema.CheckLink("link", pointed(`{"at":1}`))
 	if problem == nil || problem.Where != "link pointer" || !strings.HasPrefix(problem.Message, "at /at: ") || problem.Keyword != "type" {
 		t.Fatalf("a nested fault = %#v", problem)
 	}
@@ -381,7 +384,7 @@ func TestCheckLinkPointerWhere(t *testing.T) {
 		t.Fatalf("String() = %q", problem.String())
 	}
 	open := mustCompileSchema(t, "plan", `{}`)
-	if problem := open.CheckLinkPointer(json.RawMessage(`[1]`)); problem != nil {
+	if problem := open.CheckLink("link", pointed(`[1]`)); problem != nil {
 		t.Fatalf("a schema with no pointer rule judged %v", problem)
 	}
 }

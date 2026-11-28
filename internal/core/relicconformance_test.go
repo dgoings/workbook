@@ -140,7 +140,7 @@ func TestCreateNamesTheNewestVersionAndChecksTheWhole(t *testing.T) {
 // pins the refusal's frame and not the checker's own wording.
 func missingRequiredMessage(t *testing.T) string {
 	t.Helper()
-	problem := mustCompileSchema(t, "spec", specSchemaV2).CheckRelic(RelicData{Properties: map[string]json.RawMessage{}}, nil)
+	problem := mustCompileSchema(t, "spec", specSchemaV2).CheckRelic(RelicData{Properties: map[string]json.RawMessage{}}, nil, nil)
 	if problem == nil || problem.Where != `property "status"` || problem.Keyword != "required" {
 		t.Fatalf("CheckRelic(no status) = %+v", problem)
 	}
@@ -352,7 +352,7 @@ func TestJudgeRelicStates(t *testing.T) {
 		"unknown":        {relic(relicTestID(999), nil, part), nil, RelicConformance{State: RelicConformanceUnknownSchema}},
 		"a corrupt blob": {relic(broken.ID, nil, part), nil, RelicConformance{State: RelicConformanceUnknownSchema}},
 	} {
-		got, err := JudgeRelic(test.relic, test.fields, listing, load)
+		got, err := JudgeRelic(test.relic, test.fields, nil, listing, load)
 		if err != nil {
 			t.Fatalf("%s: JudgeRelic: %v", label, err)
 		}
@@ -370,7 +370,7 @@ func TestJudgeRelicStates(t *testing.T) {
 	failing := func(RelicSchemaVersion) (*RelicSchema, error) {
 		return nil, Errorf(CategoryOperational, "git is not answering")
 	}
-	if _, err := JudgeRelic(relic(spec.ID, draft), nil, listing, failing); CategoryOf(err) != CategoryOperational {
+	if _, err := JudgeRelic(relic(spec.ID, draft), nil, nil, listing, failing); CategoryOf(err) != CategoryOperational {
 		t.Errorf("JudgeRelic with a failing store = %v, want the store's error", err)
 	}
 

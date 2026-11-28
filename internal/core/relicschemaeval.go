@@ -430,9 +430,11 @@ func decodeSchemaMembers(members map[string]json.RawMessage) (map[string]any, st
 }
 
 // CheckRelic judges a whole relic: its properties by name, then its live
-// parts in order, each part's fields by name. fields holds each part's fields
-// by part ID. Removed parts are not judged.
-func (s *RelicSchema) CheckRelic(relic RelicData, fields map[string]map[string]json.RawMessage) *RelicSchemaProblem {
+// parts in order, each part's fields by name, then each of its links in
+// links.json order, the relationship and then the pointer. fields holds each
+// part's fields by part ID. Removed parts are not judged. links.json holds
+// live links only, so every link given is judged.
+func (s *RelicSchema) CheckRelic(relic RelicData, fields map[string]map[string]json.RawMessage, links []RelicLink) *RelicSchemaProblem {
 	if s.properties != nil {
 		object, bad := decodeSchemaMembers(relic.Properties)
 		if bad != "" {
@@ -447,6 +449,11 @@ func (s *RelicSchema) CheckRelic(relic RelicData, fields map[string]map[string]j
 			continue
 		}
 		if problem := s.CheckPart("part "+part.ID, part, fields[part.ID]); problem != nil {
+			return problem
+		}
+	}
+	for _, link := range links {
+		if problem := s.CheckLink("link "+link.ID, link); problem != nil {
 			return problem
 		}
 	}
@@ -667,17 +674,43 @@ func (n relicNumber) compare(other relicNumber) int {
 	return magnitude * n.sign
 }
 
-// CheckLinkPointer judges one link's pointer against the schema's
-// links.pointer rule, and accepts any pointer when there is no rule. A fault
+// Relations is the relationship names a new link may have under the schema:
+// the defaults, then each name the schema's links.relationships adds that is
+// not one already. With no schema it is the defaults.
+func (s *RelicSchema) Relations() []string {
+	names := DefaultRelicRelationNames()
+	if s == nil {
+		return names
+	}
+	for _, name := range s.relationships {
+		if !containsString(names, name) {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// CheckLink judges one link: that its relationship is one the schema allows,
+// then its pointer against the schema's links.pointer rule. where names the
+// link, as "link <id>" for a link the relic holds or "link" for one being
+// added; the problem's Where adds "relationship <rel>" or "pointer". A fault
 // inside the pointer is named by its JSON pointer.
-func (s *RelicSchema) CheckLinkPointer(pointer json.RawMessage) *RelicSchemaProblem {
-	if s.pointer == nil {
+func (s *RelicSchema) CheckLink(where string, link RelicLink) *RelicSchemaProblem {
+	relations := s.Relations()
+	if !containsString(relations, link.Rel) {
+		return &RelicSchemaProblem{
+			Where:   where + " relationship " + strconv.Quote(link.Rel),
+			Keyword: "relationships",
+			Message: "the relationship must be one of " + strings.Join(relations, ", "),
+		}
+	}
+	if s == nil || s.pointer == nil || link.Pointer == nil {
 		return nil
 	}
-	const where = "link pointer"
-	decoded, ok := decodeSchemaInstance(pointer)
+	pointerWhere := where + " pointer"
+	decoded, ok := decodeSchemaInstance(link.Pointer)
 	if !ok {
-		return &RelicSchemaProblem{Where: where, Message: "the value is not valid JSON"}
+		return &RelicSchemaProblem{Where: pointerWhere, Message: "the value is not valid JSON"}
 	}
 	fault := checkValue(s.pointer, decoded, "member", nil)
 	if fault == nil {
@@ -687,5 +720,5 @@ func (s *RelicSchema) CheckLinkPointer(pointer json.RawMessage) *RelicSchemaProb
 	if len(fault.pointer) > 0 {
 		message = "at " + schemaPointerText(fault.pointer) + ": " + message
 	}
-	return &RelicSchemaProblem{Where: where, Keyword: fault.keyword, Message: message}
+	return &RelicSchemaProblem{Where: pointerWhere, Keyword: fault.keyword, Message: message}
 }

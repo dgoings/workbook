@@ -93,8 +93,8 @@ func TestProjectionRoundTripsAssignments(t *testing.T) {
 // stale stamp and no probe to save it.
 //
 // So this stamps the previous version onto an otherwise-current cache and
-// requires it to be discarded. With the constant at "13" the stamp mismatches
-// and the cache is rebuilt; revert it to "12" and the stamp matches, the cache
+// requires it to be discarded. With the constant at "14" the stamp mismatches
+// and the cache is rebuilt; revert it to "13" and the stamp matches, the cache
 // survives, and this fails.
 //
 // The versions each release moved it for: "4" was assignments, "5" the comment
@@ -103,15 +103,16 @@ func TestProjectionRoundTripsAssignments(t *testing.T) {
 // compactedFrom a checkpoint leaves on every later state, "8" the due
 // date, "9" the relic tables, "10" the relic links, "11" relic
 // conformance, "12" links to relics with their seen versions and
-// pointers, and "13" a relic's compaction and the dates of its dropped parts.
+// pointers, "13" a relic's compaction and the dates of its dropped parts,
+// and "14" relic judgments that cover links and the built-in schemas.
 func TestACacheStampedWithThePreviousSchemaVersionIsDiscarded(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	config := testConfig()
 	// Belt and braces: the behavioural half below is what actually pins the
 	// stamp, and this says out loud which version it is pinned against.
-	if schemaVersion != "13" {
-		t.Fatalf("schemaVersion = %q, want \"13\"; relic compaction moved it there", schemaVersion)
+	if schemaVersion != "14" {
+		t.Fatalf("schemaVersion = %q, want \"14\"; judging relic links and built-ins moved it there", schemaVersion)
 	}
 	snapshot := testSnapshot("WB-01K0M6B8A4FTT8C39MXXYTW7D1", "head-stamped", "Stamped")
 	snapshot.State.Task.Assignments = []core.Assignment{

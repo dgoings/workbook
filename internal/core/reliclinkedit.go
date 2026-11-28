@@ -137,6 +137,14 @@ func (u *relicUpdate) addLink(ctx context.Context, edit RelicEdit) error {
 	if gone != nil {
 		return gone
 	}
+	// So is a relationship outside the list: a relic that names no schema may
+	// use the defaults only. Under a schema, checkSchema judges it against the
+	// names the schema adds as well.
+	if u.relic.Schema == "" {
+		if err := CheckOpenRelicRelation(u.relic.Type, change.Rel); err != nil {
+			return err
+		}
+	}
 	return u.record(RelicOperation{Type: RelicOperationLinkAdd, Link: &change})
 }
 

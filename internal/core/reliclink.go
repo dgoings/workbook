@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"sort"
+	"strconv"
+	"strings"
 )
 
 const (
@@ -288,4 +290,44 @@ func relicTotalsOf(record RelicRecord) relicPartTotals {
 	totals := relicPartTotalsOf(record.State.Relic)
 	totals.links = len(record.Links.Links)
 	return totals
+}
+
+// RelicRelationship is a link relationship name and how a link with it reads,
+// from the relic or part that links to what it points at.
+type RelicRelationship struct{ Name, Meaning string }
+
+// DefaultRelicRelationships are the relationship names every relic may give a
+// new link, in the order Workbook lists them. A schema's links.relationships
+// adds names to these and cannot remove one. A link made before a name was
+// checked keeps whatever name it has.
+var DefaultRelicRelationships = []RelicRelationship{
+	{"implemented-by", "This part of a spec or plan is built by that task."},
+	{"derived-from", "This was drawn from that source."},
+	{"summarizes", "This is a summary of that."},
+	{"decided-in", "This decision was made in that meeting or transcript turn."},
+	{"changes", "This decision changes that part of a spec."},
+	{"supersedes", "This relic replaces that one."},
+	{"relates-to", "A general connection with no stronger meaning."},
+}
+
+// DefaultRelicRelationNames returns the default relationship names in order,
+// as a new list.
+func DefaultRelicRelationNames() []string {
+	names := make([]string, len(DefaultRelicRelationships))
+	for index, relationship := range DefaultRelicRelationships {
+		names[index] = relationship.Name
+	}
+	return names
+}
+
+// CheckOpenRelicRelation refuses a new link's relationship on a relic that
+// names no schema, which may use the default names only. relicType is the
+// relic's type, named so the refusal can say how to add one.
+func CheckOpenRelicRelation(relicType, rel string) error {
+	if containsString(DefaultRelicRelationNames(), rel) {
+		return nil
+	}
+	return Errorf(CategoryValidation,
+		"link relationship %s is not one Workbook knows; use one of %s, or save a schema for %s whose links.relationships adds it",
+		strconv.Quote(rel), strings.Join(DefaultRelicRelationNames(), ", "), relicType)
 }

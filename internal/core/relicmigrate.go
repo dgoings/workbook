@@ -67,10 +67,10 @@ func parseRelicVersionNumber(text string) (int, bool) {
 // the target, an older one too, or a built-in this build ships, and a type
 // with no schema makes the relic open. A type's newest is its newest project
 // version, or its built-in when the project has none; N and <type>@N name
-// project versions only. The whole relic, its live parts only, must fit the
-// version it moves to. Migrating to what the relic already names writes nothing. The version
-// the relic names now is not read, so a relic naming one this clone has not
-// synced can still be moved.
+// project versions only. The whole relic, its live parts only and its links,
+// must fit the version it moves to. Migrating to what the relic already names
+// writes nothing. The version the relic names now is not read, so a relic
+// naming one this clone has not synced can still be moved.
 func (s RelicService) Migrate(ctx context.Context, idOrPrefix, target string) (RelicMutationResult, error) {
 	snapshot, err := s.relicToChange(ctx, idOrPrefix)
 	if err != nil {
@@ -128,7 +128,7 @@ func (s RelicService) Migrate(ctx context.Context, idOrPrefix, target string) (R
 		for partID, read := range content {
 			fields[partID] = read.Fields
 		}
-		problem := schema.CheckRelic(relic, fields)
+		problem := schema.CheckRelic(relic, fields, snapshot.Record.Links.Links)
 		// A relic that already names the version is not refused for not
 		// fitting it; it is reported as it stands.
 		if unchanged {

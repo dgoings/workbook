@@ -373,7 +373,7 @@ func (s RelicService) linkedConformance(ctx context.Context, summary *RelicSumma
 	var conformance RelicConformance
 	var err error
 	if _, known := listing.ByID(schemaID); !known {
-		conformance, err = JudgeRelic(RelicData{Schema: schemaID}, nil, listing, nil)
+		conformance, err = JudgeRelic(RelicData{Schema: schemaID}, nil, nil, listing, nil)
 	} else {
 		var snapshot RelicSnapshot
 		if snapshot, err = s.Reader.GetRelic(ctx, s.Config, summary.ID); err == nil {

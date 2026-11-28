@@ -98,7 +98,7 @@ func (j *relicJudge) judge(ctx context.Context, relic gitstore.IndexedRelic) (co
 		return core.RelicConformance{}, err
 	}
 	if _, known := listing.ByID(data.Schema); !known {
-		return core.JudgeRelic(data, nil, listing, nil)
+		return core.JudgeRelic(data, nil, nil, listing, nil)
 	}
 	fields := make(map[string]map[string]json.RawMessage, len(data.Parts))
 	for _, part := range data.LiveParts() {
@@ -109,7 +109,7 @@ func (j *relicJudge) judge(ctx context.Context, relic gitstore.IndexedRelic) (co
 		}
 		fields[part.ID] = document.Fields
 	}
-	return core.JudgeRelic(data, fields, listing, func(version core.RelicSchemaVersion) (*core.RelicSchema, error) {
+	return core.JudgeRelic(data, fields, relic.Snapshot.Record.Links.Links, listing, func(version core.RelicSchemaVersion) (*core.RelicSchema, error) {
 		if version.IsBuiltIn() {
 			_, schema, err := core.ReadRelicSchemaVersion(ctx, j.store.relics, j.store.config, version)
 			return schema, err

@@ -437,7 +437,7 @@ func checkShapeDocument(t *testing.T, path, schemaID string, edit func(*RelicDoc
 		relic.Parts = append(relic.Parts, stored)
 		fields[id] = part.Fields
 	}
-	return schema.CheckRelic(relic, fields)
+	return schema.CheckRelic(relic, fields, nil)
 }
 
 func TestDesignRelicShapeFitsTheDefaultSpec(t *testing.T) {

@@ -1,6 +1,14 @@
 package projection
 
-// schemaVersion is bumped to 13 because a relic can now be compacted: its
+// schemaVersion is bumped to 14 because a relic's stored judgment now covers
+// its links and the built-in schemas: conformance judges each link's
+// relationship against the default names and the ones its version adds, and
+// each link's pointer, after the properties and parts, and a relic can name a
+// built-in such as workbook:spec:1. The tables are unchanged, but a version
+// 13 cache can hold conforms for a relic whose links no longer fit, which no
+// row check would judge again, so it is discarded and Git read again.
+//
+// Version 13 was bumped because a relic can now be compacted: its
 // state records the run that replaced its history with a checkpoint, and each
 // removed part whose content that run dropped keeps only its dates. relics
 // gains compacted_run, compacted_at, compacted_boundary and compacted_since,
@@ -76,7 +84,7 @@ package projection
 // checkpoint and every recorded pack, where a missing column reads as
 // generation zero — a claim rather than an absence, and the one claim that must
 // never be made wrongly.
-const schemaVersion = "13"
+const schemaVersion = "14"
 
 const schema = `
 CREATE TABLE projection_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

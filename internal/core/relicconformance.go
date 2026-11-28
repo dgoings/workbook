@@ -38,13 +38,15 @@ type RelicConformance struct {
 }
 
 // JudgeRelic judges a whole relic against the version it names. fields holds
-// each live part's fields by part ID. Reading a relic never refuses it for not
+// each live part's fields by part ID, and links the relic's links as
+// links.json lists them. Reading a relic never refuses it for not
 // fitting, so this reports rather than refuses: a version the listing lacks,
 // or one load reports as corrupt data, judges unknown-schema. Any other load
 // error is returned.
 func JudgeRelic(
 	relic RelicData,
 	fields map[string]map[string]json.RawMessage,
+	links []RelicLink,
 	listing RelicSchemaListing,
 	load func(RelicSchemaVersion) (*RelicSchema, error),
 ) (RelicConformance, error) {
@@ -62,7 +64,7 @@ func JudgeRelic(
 		}
 		return RelicConformance{}, err
 	}
-	if problem := schema.CheckRelic(relic, fields); problem != nil {
+	if problem := schema.CheckRelic(relic, fields, links); problem != nil {
 		return RelicConformance{State: RelicConformanceNotConforming, Problem: problem.String()}, nil
 	}
 	return RelicConformance{State: RelicConformanceConforms}, nil
@@ -172,7 +174,7 @@ func (s RelicService) schemaForCreate(ctx context.Context, relicType, given stri
 // checkRelicCreateSchema judges a whole new relic: its properties, then each
 // part in order, named by its place in the create.
 func checkRelicCreateSchema(schema *RelicSchema, properties map[string]json.RawMessage, parts []relicCreatePart) *RelicSchemaProblem {
-	if problem := schema.CheckRelic(RelicData{Properties: properties}, nil); problem != nil {
+	if problem := schema.CheckRelic(RelicData{Properties: properties}, nil, nil); problem != nil {
 		return problem
 	}
 	for index, part := range parts {
@@ -216,11 +218,13 @@ func (s RelicService) schemaForUpdate(ctx context.Context, relic RelicData, reli
 }
 
 // checkSchema judges the pieces the update saves, in the order its edits
-// saved them: each property set or cleared, and each part added, edited or
-// restored, judged whole as the update leaves it, and the pointer of each link
-// added, against the schema's links.pointer rule. A title, a move, a removal,
-// a link's relationship and target, and an unlink are not judged, nor is a
-// part the update leaves removed.
+// saved them: each property set or cleared, each part added, edited or
+// restored, judged whole as the update leaves it, and each link added, its
+// relationship against the defaults and the schema's links.relationships and
+// its pointer against the schema's links.pointer rule. A title, a move, a
+// removal, a link's target, and an unlink are not judged, nor is a part the
+// update leaves removed. A link re-added that the relic already holds records
+// no operation, so it is not judged.
 func (u *relicUpdate) checkSchema(ctx context.Context, version RelicSchemaVersion, schema *RelicSchema) error {
 	if schema == nil {
 		return nil
@@ -239,9 +243,8 @@ func (u *relicUpdate) checkSchema(ctx context.Context, version RelicSchemaVersio
 		case RelicOperationPartFieldSet, RelicOperationPartFieldClear, RelicOperationPartBodySet, RelicOperationPartRestore:
 			partID = operation.Part
 		case RelicOperationLinkAdd:
-			if operation.Link.Pointer != nil {
-				problem = schema.CheckLinkPointer(operation.Link.Pointer)
-			}
+			added := operation.Link
+			problem = schema.CheckLink("link", RelicLink{From: added.From, To: added.To, Rel: added.Rel, Seen: added.Seen, Pointer: added.Pointer})
 		}
 		if partID != "" && !judged[partID] {
 			judged[partID] = true
@@ -279,7 +282,7 @@ func (s RelicService) presentSchema(ctx context.Context, document *RelicDocument
 func (s RelicService) judgeSnapshot(ctx context.Context, snapshot RelicSnapshot, listing RelicSchemaListing, content map[string]RelicPartContent) (RelicConformance, error) {
 	relic := snapshot.Record.State.Relic
 	if _, known := listing.ByID(relic.Schema); !known || s.Schemas == nil {
-		return JudgeRelic(relic, nil, listing, nil)
+		return JudgeRelic(relic, nil, nil, listing, nil)
 	}
 	fields := make(map[string]map[string]json.RawMessage, len(relic.Parts))
 	var missing []string
@@ -299,7 +302,7 @@ func (s RelicService) judgeSnapshot(ctx context.Context, snapshot RelicSnapshot,
 			fields[partID] = read[partID].Fields
 		}
 	}
-	return JudgeRelic(relic, fields, listing, s.loadSchema(ctx))
+	return JudgeRelic(relic, fields, snapshot.Record.Links.Links, listing, s.loadSchema(ctx))
 }
 
 // listedConformance is how a listed relic stands: the judgment the index

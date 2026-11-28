@@ -179,7 +179,7 @@ func mustCheck(t *testing.T, repository *gitstore.Repository, config core.Projec
 	if err != nil {
 		t.Fatal(err)
 	}
-	problem := schema.CheckRelic(core.RelicData{Properties: map[string]json.RawMessage{}}, nil)
+	problem := schema.CheckRelic(core.RelicData{Properties: map[string]json.RawMessage{}}, nil, nil)
 	if problem == nil {
 		t.Fatal("a relic with no owner fits spec version 2")
 	}
@@ -368,8 +368,8 @@ func TestSchemaVersionTenCacheIsReplaced(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT value FROM projection_meta WHERE key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != schemaVersion || schemaVersion != "13" {
-		t.Fatalf("schema version = %s (built %s), want 13", version, schemaVersion)
+	if version != schemaVersion || schemaVersion != "14" {
+		t.Fatalf("schema version = %s (built %s), want 14", version, schemaVersion)
 	}
 	countRows(t, store, `SELECT COUNT(conformance) + COUNT(schema_problem) FROM relics`)
 }
