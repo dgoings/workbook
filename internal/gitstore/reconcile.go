@@ -311,6 +311,9 @@ type taskReplay struct {
 	// different commits replayed them into each other on every round trip. A
 	// pack that reuses a held ID for other content is refused as corrupt
 	// (heldOperations.match): skipping it would take the other value silently.
+	// The one exception to the refusal is a pack whose operations that are not
+	// held are all description merges of a held edit (derivedFromHeld): it is
+	// skipped as held, since its merge is accounted for wherever that edit is.
 	held heldOperations
 	// remote is what a conflict's Remote member records: the remote whose
 	// history is replayed onto, or nothing for origin (core.ConflictRemote).
@@ -342,7 +345,8 @@ func (replay *taskReplay) next(ctx context.Context, r *Repository, sourceParent 
 			return false, err
 		}
 		switch {
-		case recorded == len(local.Operation.Operations):
+		case recorded == len(local.Operation.Operations),
+			recorded > 0 && derivedFromHeld(local.Operation, replay.held.has):
 			replay.skipped++
 			replay.carried++
 			return false, nil

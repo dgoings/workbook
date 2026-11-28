@@ -691,3 +691,144 @@ func TestMoveTasksWarnsOfADescriptionMergedWhileCarrying(t *testing.T) {
 		t.Fatalf("description = %q, want %q", got, merged)
 	}
 }
+
+// The tasks moved back to a place still holding a teammate's edit that the
+// move away carried with a merge: the new place holds that edit in a pack
+// with the merge, and the old place holds the edit alone. The move back
+// replays the mover's own edit onto the teammate's, merging the other way,
+// and counts the carried pack as held: its merge is derived from an edit the
+// old place holds. Both edits survive, no operation is recorded twice, and a
+// second run changes nothing. With the title in the teammate's pack too, the
+// pack is still carried.
+func TestMoveTasksBackAfterACarriedDescriptionMerge(t *testing.T) {
+	t.Parallel()
+	for _, objectFormat := range []string{testrepo.FormatSHA1, testrepo.FormatSHA256} {
+		for _, withTitle := range []bool{false, true} {
+			name := objectFormat + "/description"
+			if withTitle {
+				name += "-and-title"
+			}
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				moveBackAfterACarriedDescriptionMerge(t, objectFormat, withTitle)
+			})
+		}
+	}
+}
+
+func moveBackAfterACarriedDescriptionMerge(t *testing.T, objectFormat string, withTitle bool) {
+	ctx := context.Background()
+	fixture := newMoveFixture(t, objectFormat)
+	task := fixture.ids[0]
+	setSyncTaskDescription(t, fixture.second, fixture.stale, task, sixLines(nil))
+	syncClean(t, fixture.second, fixture.stale)
+	ref := taskRefPrefix + task
+	syncGit(t, fixture.first.Root, "fetch", "--quiet", "--no-tags", "origin", "+"+ref+":"+ref)
+	setSyncTaskDescription(t, fixture.first, fixture.config, task, sixLines(map[int]string{5: "the mover's line 5"}))
+	teammates := sixLines(map[int]string{2: "the teammate's line 2"})
+	input := core.UpdateInput{Description: &teammates}
+	title := "Retitled by the teammate"
+	if withTitle {
+		input.Title = &title
+	}
+	if _, err := syncService(fixture.second, fixture.stale).UpdateMutation(ctx, task, input); err != nil {
+		t.Fatal(err)
+	}
+	syncClean(t, fixture.second, fixture.stale)
+
+	if _, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{}); err != nil {
+		t.Fatalf("MoveTasks() = %v", err)
+	}
+	carried := syncGit(t, fixture.tasks, "rev-parse", ref)
+	if pack := currentSnapshotAt(t, fixture.first, fixture.config, task, carried).Operation; pack.Operations[len(pack.Operations)-1].Type != core.OperationDescriptionMerge {
+		t.Fatalf("the new place's tip records %+v, want the carried edit with its merge", pack.Operations)
+	}
+
+	first, config := pullSettings(t, fixture.first, core.TasksRemoteSetting{})
+	result, err := first.MoveTasks(ctx, config, MoveTasksOptions{})
+	if err != nil {
+		t.Fatalf("MoveTasks() back = %v", err)
+	}
+	if !result.Verified {
+		t.Fatalf("MoveTasks() back = %+v, want it verified", result)
+	}
+	if result.Stragglers != nil {
+		t.Fatalf("Stragglers = %+v, want none: the carried pack was already at the old place", result.Stragglers)
+	}
+	tip := syncGit(t, fixture.origin, "rev-parse", ref)
+	state := currentSnapshotAt(t, first, config, task, tip).State.Task
+	merged := sixLines(map[int]string{2: "the teammate's line 2", 5: "the mover's line 5"})
+	if state.Description != merged {
+		t.Fatalf("description at the old place = %q, want %q", state.Description, merged)
+	}
+	if withTitle && state.Title != title {
+		t.Fatalf("title at the old place = %q, want %q", state.Title, title)
+	}
+	requireValidTaskHistory(t, first, config, task, tip)
+	requireMoveVerifiesFromAFreshClone(t, fixture.origin, fixture.tasks)
+
+	again, err := first.MoveTasks(ctx, config, MoveTasksOptions{})
+	if err != nil || !again.Verified || again.Stragglers != nil || len(again.SetAside) != 0 || len(again.TaskWarnings) != 0 {
+		t.Fatalf("MoveTasks() back again = %+v, %v, want quiet", again, err)
+	}
+	if got := syncGit(t, fixture.origin, "rev-parse", ref); got != tip {
+		t.Fatalf("the old place moved to %s on the second run, want %s", got, tip)
+	}
+	if got := syncGit(t, fixture.tasks, "rev-parse", ref); got != carried {
+		t.Fatalf("the new place moved to %s on the second run, want %s", got, carried)
+	}
+}
+
+// requireMoveVerifiesFromAFreshClone runs the move's verification, of a move
+// from tasks to origin, in a fresh clone of origin. The checkout that moved
+// the tasks parked its replaced tip, and the verification counts what is
+// parked as set aside, so only a checkout holding nothing parked shows that
+// origin itself is found to hold everything tasks holds.
+func requireMoveVerifiesFromAFreshClone(t *testing.T, origin, tasks string) {
+	t.Helper()
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "fresh")
+	syncGit(t, t.TempDir(), "clone", "--quiet", origin, root)
+	syncGit(t, root, "remote", "add", "tasks", tasks)
+	fresh, err := Open(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := fresh.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result MoveTasksResult
+	shortfall := &moveShortfall{}
+	if err := fresh.verifyMovedTasks(ctx, config, "tasks", "origin", &result, shortfall); err != nil {
+		t.Fatalf("verifyMovedTasks() = %v", err)
+	}
+	if err := shortfall.refusal("tasks", "origin"); err != nil {
+		t.Fatalf("verification from a fresh clone = %v", err)
+	}
+}
+
+// requireValidTaskHistory checks the history at head the way workbook
+// validate does: no operation recorded twice, and each commit's stored state
+// the fold of its pack onto its parent's.
+func requireValidTaskHistory(t *testing.T, repo *Repository, config core.ProjectConfig, taskID, head string) {
+	t.Helper()
+	chains, err := repo.completeTaskChains(context.Background(), config, []TaskHead{{TaskID: taskID, ObjectID: head}})
+	if err != nil || chains[0] == nil {
+		t.Fatalf("read the history of %s at %s: %v", taskID, head, err)
+	}
+	if detail, repeated := repeatedOperation(chains[0]); repeated {
+		t.Fatal(detail)
+	}
+	var parent *core.StateDocument
+	for _, commit := range chains[0] {
+		state, err := core.DecodeStateDocument([]byte(syncGit(t, repo.Root, "cat-file", "blob", commit.ObjectID+":state.json")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := core.ValidateCheckpoint(parent, commit.Operation, state); err != nil {
+			t.Fatalf("commit %s: %v", commit.ObjectID, err)
+		}
+		parent = &state
+	}
+}

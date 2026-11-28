@@ -977,6 +977,8 @@ func (r *Repository) fetch(
 		return state, result, err
 	}
 	invalidReconciled := 0
+	// notReplayed is each such history's task ID and why, for the error.
+	var notReplayed []string
 	newerReconciled := 0
 	for _, outcome := range compactedOutcomes {
 		if outcome.Update != nil {
@@ -997,6 +999,7 @@ func (r *Repository) fetch(
 			delete(state.Tracking, outcome.TaskID)
 		case compactedNotReplayed:
 			invalidReconciled++
+			notReplayed = append(notReplayed, outcome.TaskID+": "+outcome.Result.Detail)
 		case compactedNewerWriter:
 			newerReconciled++
 		}
@@ -1009,6 +1012,7 @@ func (r *Repository) fetch(
 				newerReconciled++
 			} else {
 				invalidReconciled++
+				notReplayed = append(notReplayed, outcome.TaskID+": "+outcome.Err.Error())
 			}
 			state.Outcomes[outcome.TaskID] = SyncTaskResult{
 				TaskID: outcome.TaskID,
@@ -1086,7 +1090,12 @@ func (r *Repository) fetch(
 		return state, result, core.Errorf(core.CategoryCorruptData, "%d fetched task ref(s) failed validation", invalidTracking)
 	}
 	if invalidReconciled > 0 {
-		return state, result, core.Errorf(core.CategoryCorruptData, "%d divergent task history(s) could not be replayed", invalidReconciled)
+		// Each task's reason is in the error as well as in its result, since
+		// a command that stops on this error, such as move-tasks, prints no
+		// result.
+		sort.Strings(notReplayed)
+		return state, result, core.Errorf(core.CategoryCorruptData, "%d divergent task history(s) could not be replayed: %s",
+			invalidReconciled, strings.Join(notReplayed, "; "))
 	}
 	if err := relicStage.corruptError(); err != nil {
 		return state, result, err

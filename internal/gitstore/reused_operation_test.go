@@ -118,6 +118,31 @@ func TestMoveTasksRefusesAnOperationIDReusedWithOtherContentAtTheOldPlace(t *tes
 	}
 }
 
+// A move whose copy to the new place stops because a task's replay was
+// refused says which task and why, since the command prints no fetch result
+// when it fails: here the new place holds a commit reusing the ID of this
+// checkout's unpublished edit with other content.
+func TestMoveTasksNamesTheTaskItCouldNotCopyAndWhy(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newMoveFixture(t, testrepo.FormatSHA1)
+	taskID := fixture.ids[0]
+	updateSyncTask(t, fixture.first, fixture.config, taskID, "Mine")
+	mine := currentSnapshot(t, fixture.first, fixture.config, taskID)
+	forged := forgeReusedOperation(t, fixture.second, fixture.stale, taskID, mine, "Forged")
+	syncGit(t, fixture.second.Root, "push", "--quiet", fixture.tasks, forged+":"+taskRefPrefix+taskID)
+
+	result, err := fixture.first.MoveTasks(ctx, fixture.config, MoveTasksOptions{})
+	if core.CategoryOf(err) != core.CategoryCorruptData || result.Verified {
+		t.Fatalf("MoveTasks() = %+v, %v (category %q), want a corrupt-data refusal", result, err, core.CategoryOf(err))
+	}
+	for _, want := range []string{"cannot copy the tasks to tasks", "could not be replayed: " + taskID + ": ", mine.Operation.Operations[0].ID, "different content"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("MoveTasks() error = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
 // Verification compares content too: a new place that, by the time the run
 // verifies it, holds a commit reusing one of the old place's operation IDs for
 // other content fails the run as corrupt rather than reporting it verified.

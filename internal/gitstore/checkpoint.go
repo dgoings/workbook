@@ -654,6 +654,12 @@ func (accounted operationAccount) covers(commit OperationCommit) bool {
 	return true
 }
 
+// has reports whether id is accounted for.
+func (accounted operationAccount) has(id string) bool {
+	_, found := accounted[id]
+	return found
+}
+
 func (accounted operationAccount) coversAll(ids []string) bool {
 	for _, id := range ids {
 		if _, found := accounted[id]; !found {

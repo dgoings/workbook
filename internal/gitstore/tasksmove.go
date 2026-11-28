@@ -929,6 +929,11 @@ func (r *Repository) carryTask(
 	if err != nil {
 		return nil, nil, err
 	}
+	// A pack whose only operations this history lacks are merges of an edit
+	// it holds is held (derivedFromHeld), and there is nothing to carry.
+	missing = slices.DeleteFunc(missing, func(commit OperationCommit) bool {
+		return derivedFromHeld(commit.Operation, held.has)
+	})
 	if len(missing) == 0 {
 		return nil, nil, nil
 	}
@@ -1387,8 +1392,10 @@ func (r *Repository) markTasksReturned(ctx context.Context, to, from string) (st
 // counts it, and says nothing about it. Equal commits are counted without
 // reading anything: a commit ID names the whole history below it. Everything
 // else is compared by operation ID, because a task carried by replay holds
-// the same operations under other commits. A history at the new place that
-// records an operation twice fails the run too.
+// the same operations under other commits. A description merge the new place
+// does not record counts as held when the edit it merged is held there
+// (derivedFromHeld): a replay there merged that edit itself. A history at the
+// new place that records an operation twice fails the run too.
 func (r *Repository) verifyMovedTasks(
 	ctx context.Context, config core.ProjectConfig, from, to string, result *MoveTasksResult, shortfall *moveShortfall,
 ) error {
@@ -1485,7 +1492,8 @@ func (r *Repository) verifyMovedTasks(
 				if _, err := held.match(name, commit.ObjectID, commit.Operation); err != nil {
 					return wrapKeepingCategory(fmt.Sprintf("%s and %s disagree about task %s", from, to, name), err)
 				}
-				if account.covers(commit) || aside.covers(commit) {
+				if account.covers(commit) || aside.covers(commit) ||
+					derivedFromHeld(commit.Operation, account.has) || derivedFromHeld(commit.Operation, aside.has) {
 					continue
 				}
 				for _, operation := range commit.Operation.Operations {

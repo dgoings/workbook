@@ -6086,6 +6086,10 @@ pack that history already records, so a rerun never writes an operation twice.
 A description both places changed on different lines is
 [merged](#merged-descriptions) by that replay, with a `description-merged`
 warning that names the old place.
+That merge counts as held, by the replay and by the check in step 7, wherever
+the edit it merged is held, because the replay there merges that edit itself:
+moving the tasks back to a place holding the edit alone merges it the other
+way and completes.
 One that conflicts with the new place's history is set aside instead: the old
 place's history for that task is parked in this checkout under
 `refs/workbook/reconciled/<task>/<n>`, and the run finishes and exits 8. Its

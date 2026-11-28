@@ -2635,7 +2635,12 @@ nobody edited elsewhere arrives with the same commits, and then marks the old
 place. What the old place holds and the new place lacks is carried by
 operation identity: an operation already recorded on the history it would be
 replayed onto is skipped whatever its commit, and only a missing one is
-written, once. Identity is checked by content as well as ID: a pack that
+written, once. A `description.merge` is derived from the edit it names as
+`other`, so it counts as held wherever that edit is held, and a pack whose
+only unrecorded operations are such merges is skipped like a recorded one: the
+replay at that place merges the edit itself, under another ID. Any other
+partly recorded pack is refused, since writing it would record an ID twice.
+Identity is checked by content as well as ID: a pack that
 reuses a recorded ID for a different change is refused as corrupt, naming both
 commits, because skipping it would take one value silently. Every publication
 also refuses a history that records an operation ID twice, wherever it came
