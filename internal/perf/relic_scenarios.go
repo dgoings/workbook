@@ -892,15 +892,15 @@ func (b *relicBench) measureMain() error {
 	} else if refs != listed {
 		return fmt.Errorf("the main repository holds %d relic refs, want the fixture's %d", refs, listed)
 	}
-	plans := 0
+	agendas := 0
 	for index := range relics.Relics {
-		if relicFixtureTypes[index%len(relicFixtureTypes)] == "plan" {
-			plans++
+		if relicFixtureTypes[index%len(relicFixtureTypes)] == "agenda" {
+			agendas++
 		}
 	}
 	lists := []relicRead{
 		{"relic-list", []string{"relic", "list", "--json"}, verifyRelicListCount(listed)},
-		{"relic-list-type", []string{"relic", "list", "--type", "plan", "--json"}, verifyRelicListCount(plans)},
+		{"relic-list-type", []string{"relic", "list", "--type", "agenda", "--json"}, verifyRelicListCount(agendas)},
 	}
 	for _, read := range append(lists, relicReverseLookups(fixture)...) {
 		for range samples {

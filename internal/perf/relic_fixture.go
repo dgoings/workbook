@@ -34,8 +34,10 @@ const (
 	relicHistoryLinesPerEdit = 5
 )
 
-// relicFixtureTypes are the relic types the fixture relics take in turn.
-var relicFixtureTypes = []string{"spec", "plan", "decision", "transcript", "note"}
+// relicFixtureTypes are the relic types the fixture relics take in turn. None
+// has a built-in schema: the fixture's relics are open, and a relic of type
+// spec or plan made through the CLI would be checked against one.
+var relicFixtureTypes = []string{"paper", "agenda", "decision", "transcript", "note"}
 
 // relicFixtureOrigin is where the relic fixture's IDs start and the instant
 // every change it writes is recorded at: one year after the task fixture's
@@ -483,7 +485,7 @@ func (b *relicFixtureBuilder) largeRelicDocument() (core.RelicDocument, error) {
 		Format:     core.RelicDocumentFormat,
 		Version:    relicDocumentVersion,
 		Title:      "Benchmark large relic",
-		Type:       "spec",
+		Type:       "paper",
 		Properties: map[string]json.RawMessage{},
 		Parts:      make([]core.RelicDocumentPart, spec.LargeParts),
 		Links:      []core.RelicDocumentLink{},

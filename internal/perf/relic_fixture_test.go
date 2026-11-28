@@ -116,7 +116,7 @@ func TestAddRelicFixtureBuildsTheSmokeSet(t *testing.T) {
 			if len(fixture.RelicIDs) != 20 {
 				t.Fatalf("fixture relic IDs = %d, want 20", len(fixture.RelicIDs))
 			}
-			wantTypes := []string{"spec", "plan", "decision", "transcript", "note"}
+			wantTypes := []string{"paper", "agenda", "decision", "transcript", "note"}
 			if !reflect.DeepEqual(fixture.Types, wantTypes) {
 				t.Fatalf("types = %v, want %v", fixture.Types, wantTypes)
 			}
@@ -157,8 +157,8 @@ func TestAddRelicFixtureBuildsTheSmokeSet(t *testing.T) {
 			}
 
 			large, found := byID[fixture.LargeRelic]
-			if !found || large.Type != "spec" || large.Parts != 50 {
-				t.Fatalf("large relic = %+v (listed %v), want a spec with 50 live parts", large, found)
+			if !found || large.Type != "paper" || large.Parts != 50 {
+				t.Fatalf("large relic = %+v (listed %v), want a paper with 50 live parts", large, found)
 			}
 			body, found := byID[fixture.BodyRelic]
 			if !found || body.Type != "note" {
