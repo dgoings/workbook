@@ -69,7 +69,7 @@ func TestPreDescriptionMergeBuildRefusesAMergedTask(t *testing.T) {
 			mergeWarnings++
 		}
 	}
-	if mergeWarnings > 1 {
+	if mergeWarnings != 1 {
 		t.Fatalf("merging sync warnings = %+v, want one %s", envelope.Warnings, core.WarningDescriptionMerged)
 	}
 	tip := remoteTaskRefValue(t, other, taskID)

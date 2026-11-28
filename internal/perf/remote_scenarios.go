@@ -233,7 +233,7 @@ func verifyRemoteScenarioMeasurement(ctx context.Context, definition remoteScena
 
 // requireMergedDescription checks that the divergent task's description was
 // merged: this clone's tip records a description.merge and holds both edits,
-// and the sync reported no more than one merge warning. The task being
+// and the sync reported exactly one merge warning. The task being
 // reconciled, with no conflict, is what the shared task result, exit code and
 // envelope checks already require.
 func requireMergedDescription(ctx context.Context, fixture RemoteFixture, warnings []core.Warning) error {
@@ -243,7 +243,7 @@ func requireMergedDescription(ctx context.Context, fixture RemoteFixture, warnin
 			merged++
 		}
 	}
-	if merged > 1 {
+	if merged != 1 {
 		return fmt.Errorf("sync reported %d %s warnings, want one", merged, core.WarningDescriptionMerged)
 	}
 	taskID := fixture.TaskIDs[0]
