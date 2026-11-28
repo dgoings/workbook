@@ -858,7 +858,10 @@ gives change hunks. Hunks of the two sides that overlap or are adjacent,
 transitively, form a region. A region one side changed takes that side's lines.
 A region both changed takes them only when both give the same bytes, and is
 otherwise an overlap. Lines outside every region are the ancestor's. These are
-the rules `git merge-file` applies without its zealous simplification.
+the rules `git merge-file` applies without its zealous simplification. The
+result is not always the same as Git's: in a run of identical lines the diff
+chooses which copy a change touched, so a change can land one line away, and
+one deletion by each side can align as the same deletion and be taken once.
 
 | Bound | Value | Past it |
 | --- | --- | --- |

@@ -3348,7 +3348,8 @@ from the same line with one.
   to **adjacent** lines, such as one side's line 3 and the other's line 4,
   an insertion at the edge of a change, and two insertions at one point. These
   are the rules of `git merge-file`, which also conflicts on adjacent lines.
-  Workbook does not run Git for it.
+  Workbook does not run Git for it, and its result is not always Git's: see
+  repeated lines under [What is guaranteed](#what-is-guaranteed).
 - Every other line is the ancestor's.
 
 #### Why a body was not merged
@@ -3385,6 +3386,12 @@ later release and never lowered.
   same tips gives the same bytes, and the stored result is what every clone
   reads.
 - **Nothing lost.** Both sides' texts stay in the history.
+- **Best effort: repeated lines.** In a run of identical lines, which copy a
+  change touched is a guess. A change there can land one line away from where
+  it was made, and two sides that each deleted one copy can be read as having
+  made the same deletion, which is then taken once. When that makes the merged
+  text equal to the text that stands, nothing is recorded and no warning is
+  given. `git merge-file` can give a different text for the same three inputs.
 - **Best effort: whether two edits merge depends on the method.** A clean line
   merge can still be wrong in meaning, for example when one side renames a thing
   another side refers to on a different line. The merge is recorded and marked,
