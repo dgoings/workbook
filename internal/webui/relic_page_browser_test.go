@@ -643,7 +643,11 @@ func TestBrowserLargeRelicLoadsBodiesAsTheyNearTheScreen(t *testing.T) {
 	openInBrowser(t, fake.handler(t), browserPage{Width: 1440, Height: 900, Path: "/relics/" + pageRelicID, Script: relicPageHelpers + `
 (async () => {
   await waitForRelicState("ready");
-  await waitFor(() => relicView().dataset.bodiesPending === "0" && bodyStates().includes("drawn"), "the bodies near the screen to load");
+  // Each megabyte body is drawn on the page's one thread, and beside the other
+  // packages' tests that takes ten times as long as alone. The page load's own
+  // deadline still ends a page that never gets there.
+  const slow = 40000;
+  await waitFor(() => relicView().dataset.bodiesPending === "0" && bodyStates().includes("drawn"), "the bodies near the screen to load", slow);
   const requested = () => performance.getEntriesByType("resource").filter((entry) => entry.name.includes("/parts/")).length;
   const atReady = requested();
   // What the narrow layout does when a window shrinks or a phone turns: main
@@ -655,12 +659,12 @@ func TestBrowserLargeRelicLoadsBodiesAsTheyNearTheScreen(t *testing.T) {
   document.querySelector("main").style.overflow = "visible";
   window.dispatchEvent(new Event("resize"));
   await new Promise((resolve) => setTimeout(resolve, 500));
-  await waitFor(() => relicView().dataset.bodiesPending === "0", "the queue to empty after the layout narrowed");
+  await waitFor(() => relicView().dataset.bodiesPending === "0", "the queue to empty after the layout narrowed", slow);
   const afterNarrowing = requested();
   const lastPart = partSection("` + last + `");
   lastPart.scrollIntoView();
-  await waitFor(() => lastPart.querySelector("[data-body-state]").dataset.bodyState === "drawn", "the last part's body");
-  await waitFor(() => relicView().dataset.bodiesPending === "0", "the queue to empty");
+  await waitFor(() => lastPart.querySelector("[data-body-state]").dataset.bodyState === "drawn", "the last part's body", slow);
+  await waitFor(() => relicView().dataset.bodiesPending === "0", "the queue to empty", slow);
   return { atReady, afterNarrowing, afterScroll: requested(), lastState: lastPart.querySelector("[data-body-state]").dataset.bodyState, sections: document.querySelectorAll("[data-relic-part]").length };
 })()`}, &result)
 	reads, most := fake.reads()

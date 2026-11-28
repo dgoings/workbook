@@ -519,10 +519,11 @@ async function evaluateInOpened(port, openerID, opened) {
 `
 
 // pageGeometryHelpers is prepended to a page script: waitFor polls until a
-// condition holds, and box reads an element's rectangle as plain numbers.
+// condition holds, for fifteen seconds unless the caller allows longer, and
+// box reads an element's rectangle as plain numbers.
 const pageGeometryHelpers = `
-const waitFor = async (check, what) => {
-  const deadline = Date.now() + 15000;
+const waitFor = async (check, what, within = 15000) => {
+  const deadline = Date.now() + within;
   while (!check()) {
     if (Date.now() > deadline) throw new Error("timed out waiting for " + what);
     await new Promise((resolve) => setTimeout(resolve, 25));
